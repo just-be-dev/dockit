@@ -1,0 +1,22 @@
+[tools]
+bun = "1.3.10"
+
+[settings]
+experimental = true
+pin = true
+
+[hooks]
+postinstall = "bun install"
+
+[env]
+_.path = "node_modules/.bin"
+
+[tasks.test]
+run = "bun test"
+
+[tasks.typecheck]
+run = "tsgo --build"
+
+[tasks.build]
+run = "bun build"
+

@@ -1,0 +1,12 @@
+{
+  "name": "automerge-cloudflare",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@typescript/native-preview": "^7.0.0-dev.20260317.1"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
