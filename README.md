@@ -1,15 +1,19 @@
-# automerge-cloudflare
+# automerge
 
-To install dependencies:
+[Automerge](https://automerge.org/) adapters for various runtimes.
 
-```bash
-bun install
+## Packages
+
+| Package | Description |
+|---|---|
+| [`@just-be/automerge-cloudflare`](packages/automerge-cloudflare) | Storage and network adapters for Cloudflare Workers |
+
+## Development
+
+Requires [mise](https://mise.jdx.dev/) (manages Bun 1.3.10).
+
+```sh
+bun install          # install dependencies
+mise test            # run tests
+mise run typecheck   # type check with tsgo
 ```
-
-To run:
-
-```bash
-bun run index.ts
-```
-
-This project was created using `bun init` in bun v1.3.1. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
