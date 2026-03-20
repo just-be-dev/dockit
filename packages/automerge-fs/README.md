@@ -20,10 +20,10 @@ bun add @just-be/automerge-fs
 
 ```ts
 import { Repo } from "@automerge/automerge-repo"
-import { AutomergeFsMultiDoc, InMemoryBlobStore } from "@just-be/automerge-fs"
+import { AutomergeFs, InMemoryBlobStore } from "@just-be/automerge-fs"
 
 const repo = new Repo({ network: [] })
-const fs = AutomergeFsMultiDoc.create({
+const fs = AutomergeFs.create({
   repo,
   blobStore: new InMemoryBlobStore(),
 })
@@ -72,7 +72,7 @@ const layer = AutomergeFsFileSystem.pipe(
 
 ## API
 
-### `AutomergeFsMultiDoc`
+### `AutomergeFs`
 
 | Method | Description |
 |---|---|

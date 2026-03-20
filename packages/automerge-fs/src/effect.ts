@@ -10,16 +10,20 @@ import { Effect, Layer, Option, ServiceMap, Stream } from "effect"
 import { FileSystem, make as makeFileSystem, Size, type File as FsFile } from "effect/FileSystem"
 import { systemError, badArgument, type PlatformError } from "effect/PlatformError"
 import type { Repo } from "@automerge/automerge-repo"
-import { AutomergeFsMultiDoc } from "./fs"
+import { AutomergeFs, normalizePath, joinPath } from "./fs"
 import { InMemoryBlobStore, type BlobStore } from "./blob-store"
 
 // =============================================================================
-// Tag for providing the AutomergeFsMultiDoc instance
+// Service Tags
 // =============================================================================
+
+export class BlobStoreTag extends ServiceMap.Service<BlobStoreTag, BlobStore>()(
+  "@just-be/automerge-fs/BlobStore"
+) {}
 
 export class AutomergeFsInstance extends ServiceMap.Service<
   AutomergeFsInstance,
-  AutomergeFsMultiDoc
+  AutomergeFs
 >()("@just-be/automerge-fs/Instance") {}
 
 // =============================================================================
@@ -86,7 +90,7 @@ const toSysError = (method: string, path: string, e: unknown): PlatformError => 
 // =============================================================================
 
 /**
- * Creates an Effect FileSystem layer backed by AutomergeFsMultiDoc.
+ * Creates an Effect FileSystem layer backed by AutomergeFs.
  *
  * Usage:
  * ```ts
@@ -114,6 +118,12 @@ export const AutomergeFsFileSystem: Layer.Layer<FileSystem, never, AutomergeFsIn
       const amfs = yield* AutomergeFsInstance
 
       let tempCounter = 0
+      const tempPath = (options?: { prefix?: string; suffix?: string; directory?: string }) => {
+        const prefix = options?.prefix ?? "tmp-"
+        const suffix = options?.suffix ?? ""
+        const dir = options?.directory ?? "/tmp"
+        return `${dir}/${prefix}${Date.now()}-${tempCounter++}${suffix}`
+      }
 
       return makeFileSystem({
         access: (path) =>
@@ -160,20 +170,15 @@ export const AutomergeFsFileSystem: Layer.Layer<FileSystem, never, AutomergeFsIn
           }),
 
         makeDirectory: (path, options) =>
-          Effect.tryPromise({
+          Effect.try({
             try: () => amfs.mkdir(path, options),
             catch: (e) => toSysError("makeDirectory", path, e),
           }),
 
         makeTempDirectory: (options) =>
-          Effect.sync(() => {
-            const prefix = options?.prefix ?? "tmp-"
-            const dir = options?.directory ?? "/tmp"
-            const name = `${prefix}${Date.now()}-${tempCounter++}`
-            return `${dir}/${name}`
-          }).pipe(
+          Effect.sync(() => tempPath(options)).pipe(
             Effect.tap((path) =>
-              Effect.tryPromise({
+              Effect.try({
                 try: () => amfs.mkdir(path, { recursive: true }),
                 catch: (e) => toSysError("makeTempDirectory", path, e),
               })
@@ -182,14 +187,9 @@ export const AutomergeFsFileSystem: Layer.Layer<FileSystem, never, AutomergeFsIn
 
         makeTempDirectoryScoped: (options) =>
           Effect.acquireRelease(
-            Effect.sync(() => {
-              const prefix = options?.prefix ?? "tmp-"
-              const dir = options?.directory ?? "/tmp"
-              const name = `${prefix}${Date.now()}-${tempCounter++}`
-              return `${dir}/${name}`
-            }).pipe(
+            Effect.sync(() => tempPath(options)).pipe(
               Effect.tap((path) =>
-                Effect.tryPromise({
+                Effect.try({
                   try: () => amfs.mkdir(path, { recursive: true }),
                   catch: (e) => toSysError("makeTempDirectoryScoped", path, e),
                 })
@@ -204,16 +204,14 @@ export const AutomergeFsFileSystem: Layer.Layer<FileSystem, never, AutomergeFsIn
 
         makeTempFile: (options) =>
           Effect.gen(function* () {
-            const prefix = options?.prefix ?? "tmp-"
-            const suffix = options?.suffix ?? ""
+            const path = tempPath(options)
             const dir = options?.directory ?? "/tmp"
-            const name = `${prefix}${Date.now()}-${tempCounter++}${suffix}`
-            const path = `${dir}/${name}`
+            yield* Effect.try({
+              try: () => amfs.mkdir(dir, { recursive: true }),
+              catch: (e) => toSysError("makeTempFile", path, e),
+            })
             yield* Effect.tryPromise({
-              try: async () => {
-                await amfs.mkdir(dir, { recursive: true })
-                await amfs.writeFile(path, "")
-              },
+              try: () => amfs.writeFile(path, ""),
               catch: (e) => toSysError("makeTempFile", path, e),
             })
             return path
@@ -222,16 +220,14 @@ export const AutomergeFsFileSystem: Layer.Layer<FileSystem, never, AutomergeFsIn
         makeTempFileScoped: (options) =>
           Effect.acquireRelease(
             Effect.gen(function* () {
-              const prefix = options?.prefix ?? "tmp-"
-              const suffix = options?.suffix ?? ""
+              const path = tempPath(options)
               const dir = options?.directory ?? "/tmp"
-              const name = `${prefix}${Date.now()}-${tempCounter++}${suffix}`
-              const path = `${dir}/${name}`
+              yield* Effect.try({
+                try: () => amfs.mkdir(dir, { recursive: true }),
+                catch: (e) => toSysError("makeTempFileScoped", path, e),
+              })
               yield* Effect.tryPromise({
-                try: async () => {
-                  await amfs.mkdir(dir, { recursive: true })
-                  await amfs.writeFile(path, "")
-                },
+                try: () => amfs.writeFile(path, ""),
                 catch: (e) => toSysError("makeTempFileScoped", path, e),
               })
               return path
@@ -272,7 +268,7 @@ export const AutomergeFsFileSystem: Layer.Layer<FileSystem, never, AutomergeFsIn
             catch: (e) => toSysError("readLink", path, e),
           }),
 
-        realPath: (path) => Effect.succeed(normPath(path)),
+        realPath: (path) => Effect.succeed(normalizePath(path)),
 
         remove: (path, options) =>
           Effect.tryPromise({
@@ -351,10 +347,12 @@ export const AutomergeFsFileSystem: Layer.Layer<FileSystem, never, AutomergeFsIn
  * import { Effect } from "effect"
  * import { FileSystem } from "effect/FileSystem"
  * import { Repo } from "@automerge/automerge-repo"
- * import { makeFs } from "@just-be/automerge-fs"
+ * import { makeFs } from "@just-be/automerge-fs/effect"
  *
  * const repo = new Repo({ network: [] })
- * const layer = makeFs({ repo })
+ * const layer = makeFs({ repo }).pipe(
+ *   Layer.provide(InMemoryBlobStoreLayer)
+ * )
  *
  * const program = Effect.gen(function* () {
  *   const fs = yield* FileSystem
@@ -367,44 +365,39 @@ export const AutomergeFsFileSystem: Layer.Layer<FileSystem, never, AutomergeFsIn
  */
 export const makeFs = (opts: {
   repo: Repo
-  blobStore?: BlobStore
-}): Layer.Layer<FileSystem> =>
+}): Layer.Layer<FileSystem, never, BlobStoreTag> =>
   Layer.provide(
     AutomergeFsFileSystem,
-    Layer.succeed(
+    Layer.effect(
       AutomergeFsInstance,
-      AutomergeFsMultiDoc.create({
-        repo: opts.repo,
-        blobStore: opts.blobStore ?? new InMemoryBlobStore(),
+      Effect.gen(function* () {
+        const blobStore = yield* BlobStoreTag
+        return AutomergeFs.create({ repo: opts.repo, blobStore })
       })
     )
   )
+
+export const InMemoryBlobStoreLayer: Layer.Layer<BlobStoreTag> =
+  Layer.succeed(BlobStoreTag, new InMemoryBlobStore())
 
 // =============================================================================
 // Helpers
 // =============================================================================
 
-function normPath(path: string): string {
-  if (path === "/") return "/"
-  return path.replace(/\/+$/, "").replace(/\/+/g, "/")
-}
-
 function collectRecursive(
-  amfs: AutomergeFsMultiDoc,
+  amfs: AutomergeFs,
   path: string,
   prefix = ""
 ): string[] {
   const entries = amfs.readdir(path)
   const result: string[] = []
-  const normalized = normPath(path)
+  const normalized = normalizePath(path)
 
   for (const entry of entries) {
     const relative = prefix ? `${prefix}/${entry.name}` : entry.name
     result.push(relative)
     if (entry.isDirectory) {
-      const childPath =
-        normalized === "/" ? `/${entry.name}` : `${normalized}/${entry.name}`
-      result.push(...collectRecursive(amfs, childPath, relative))
+      result.push(...collectRecursive(amfs, joinPath(normalized, entry.name), relative))
     }
   }
 

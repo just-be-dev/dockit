@@ -1,3 +1,2 @@
-export { AutomergeFsMultiDoc } from "./fs"
-export { type BlobStore, InMemoryBlobStore, BlobStoreTag } from "./blob-store"
-export { AutomergeFsFileSystem, AutomergeFsInstance, makeFs } from "./effect"
+export { AutomergeFs, normalizePath, joinPath, type StatInfo, type DirEntry } from "./fs"
+export { type BlobStore, InMemoryBlobStore } from "./blob-store"

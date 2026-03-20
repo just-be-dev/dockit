@@ -1,16 +1,16 @@
 import { describe, expect, it } from "bun:test"
 import { Repo } from "@automerge/automerge-repo"
-import { AutomergeFsMultiDoc } from "./fs"
+import { AutomergeFs } from "./fs"
 import { InMemoryBlobStore } from "./blob-store"
 
 function makeFs() {
-  return AutomergeFsMultiDoc.create({
+  return AutomergeFs.create({
     repo: new Repo({ network: [] }),
     blobStore: new InMemoryBlobStore(),
   })
 }
 
-describe("AutomergeFsMultiDoc direct API", () => {
+describe("AutomergeFs direct API", () => {
   it("writeFile and readFile round-trip text", async () => {
     const fs = makeFs()
     await fs.writeFile("/hello.txt", "world")

@@ -1,5 +1,3 @@
-import { ServiceMap } from "effect"
-
 export interface BlobStore {
   get(hash: string): Promise<Uint8Array | null>
   set(hash: string, data: Uint8Array): Promise<void>
@@ -31,7 +29,3 @@ export class InMemoryBlobStore implements BlobStore {
     return [...this.store.keys()]
   }
 }
-
-export class BlobStoreTag extends ServiceMap.Service<BlobStoreTag, BlobStore>()(
-  "@just-be/automerge-fs/BlobStore"
-) {}

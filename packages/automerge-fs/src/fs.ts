@@ -37,11 +37,68 @@ interface FileDoc {
   content: string
 }
 
+export interface StatInfo {
+  size: number
+  isFile: boolean
+  isDirectory: boolean
+  isSymbolicLink: boolean
+  mode: number
+  mtime: Date
+  ctime: Date
+}
+
+export interface DirEntry {
+  name: string
+  isFile: boolean
+  isDirectory: boolean
+  isSymbolicLink: boolean
+}
+
 // =============================================================================
-// AutomergeFsMultiDoc
+// Path Helpers
 // =============================================================================
 
-export class AutomergeFsMultiDoc {
+export function normalizePath(path: string): string {
+  if (path === "/") return "/"
+  return path.replace(/\/+$/, "").replace(/\/+/g, "/")
+}
+
+function getParentPath(path: string): string {
+  if (path === "/") return "/"
+  const parts = path.split("/").filter((p) => p)
+  if (parts.length === 1) return "/"
+  return "/" + parts.slice(0, -1).join("/")
+}
+
+function getBasename(path: string): string {
+  if (path === "/") return "/"
+  const parts = path.split("/").filter((p) => p)
+  return parts[parts.length - 1] ?? ""
+}
+
+export function joinPath(parent: string, child: string): string {
+  return parent === "/" ? `/${child}` : `${parent}/${child}`
+}
+
+// =============================================================================
+// AutomergeFs
+// =============================================================================
+
+function toStatInfo(entry: TreeEntry): StatInfo {
+  return {
+    size: entry.metadata.size,
+    isFile: entry.type === "file",
+    isDirectory: entry.type === "directory",
+    isSymbolicLink: entry.type === "symlink",
+    mode: entry.metadata.mode,
+    mtime: new Date(entry.metadata.mtime),
+    ctime: new Date(entry.metadata.ctime),
+  }
+}
+
+const utf8Decoder = new TextDecoder("utf-8", { fatal: true })
+
+export class AutomergeFs {
   private handle: DocHandle<FsRootDoc>
   private repo: Repo
   private blobStore: BlobStore
@@ -53,7 +110,7 @@ export class AutomergeFsMultiDoc {
     this.blobStore = blobStore
   }
 
-  static create(opts: { repo: Repo; blobStore: BlobStore }): AutomergeFsMultiDoc {
+  static create(opts: { repo: Repo; blobStore: BlobStore }): AutomergeFs {
     const handle = opts.repo.create<FsRootDoc>()
     handle.change((doc) => {
       doc.tree = {}
@@ -69,43 +126,21 @@ export class AutomergeFsMultiDoc {
         },
       }
     })
-    return new AutomergeFsMultiDoc(handle, opts.repo, opts.blobStore)
+    return new AutomergeFs(handle, opts.repo, opts.blobStore)
   }
 
   static async load(opts: {
     repo: Repo
     blobStore: BlobStore
     rootDocUrl: string
-  }): Promise<AutomergeFsMultiDoc> {
+  }): Promise<AutomergeFs> {
     const handle = await opts.repo.find<FsRootDoc>(opts.rootDocUrl as AutomergeUrl)
     await handle.whenReady()
-    return new AutomergeFsMultiDoc(handle, opts.repo, opts.blobStore)
+    return new AutomergeFs(handle, opts.repo, opts.blobStore)
   }
 
   get rootDocUrl(): string {
     return this.handle.url
-  }
-
-  // ===========================================================================
-  // Path Helpers
-  // ===========================================================================
-
-  private normalizePath(path: string): string {
-    if (path === "/") return "/"
-    return path.replace(/\/+$/, "").replace(/\/+/g, "/")
-  }
-
-  private getParentPath(path: string): string {
-    if (path === "/") return "/"
-    const parts = path.split("/").filter((p) => p)
-    if (parts.length === 1) return "/"
-    return "/" + parts.slice(0, -1).join("/")
-  }
-
-  private getBasename(path: string): string {
-    if (path === "/") return "/"
-    const parts = path.split("/").filter((p) => p)
-    return parts[parts.length - 1] ?? ""
   }
 
   // ===========================================================================
@@ -120,10 +155,10 @@ export class AutomergeFsMultiDoc {
    * Throws ELOOP on symlink cycles.
    */
   private resolveEntry(path: string): { resolved: string; entry: TreeEntry } | null {
-    let current = this.normalizePath(path)
+    let current = normalizePath(path)
     const seen = new Set<string>()
 
-    for (let i = 0; i < AutomergeFsMultiDoc.MAX_SYMLINK_DEPTH; i++) {
+    for (let i = 0; i < AutomergeFs.MAX_SYMLINK_DEPTH; i++) {
       const entry = this.getEntry(current)
       if (!entry) return null
       if (entry.type !== "symlink" || !entry.symlinkTarget) {
@@ -135,12 +170,10 @@ export class AutomergeFsMultiDoc {
       seen.add(current)
       const target = entry.symlinkTarget
       if (target.startsWith("/")) {
-        current = this.normalizePath(target)
+        current = normalizePath(target)
       } else {
-        const parent = this.getParentPath(current)
-        current = this.normalizePath(
-          parent === "/" ? `/${target}` : `${parent}/${target}`
-        )
+        const parent = getParentPath(current)
+        current = normalizePath(joinPath(parent, target))
       }
     }
     throw new Error(`ELOOP: too many levels of symbolic links: ${path}`)
@@ -151,13 +184,13 @@ export class AutomergeFsMultiDoc {
   // ===========================================================================
 
   private getEntry(path: string): TreeEntry | null {
-    const normalized = this.normalizePath(path)
+    const normalized = normalizePath(path)
     const doc = this.handle.doc()
     return doc?.tree?.[normalized] ?? null
   }
 
   private setEntry(path: string, entry: TreeEntry): void {
-    const normalized = this.normalizePath(path)
+    const normalized = normalizePath(path)
     this.handle.change((doc) => {
       if (!doc.tree) {
         doc.tree = {}
@@ -167,25 +200,12 @@ export class AutomergeFsMultiDoc {
   }
 
   private deleteEntry(path: string): void {
-    const normalized = this.normalizePath(path)
+    const normalized = normalizePath(path)
     this.handle.change((doc) => {
       if (doc.tree) {
         delete doc.tree[normalized]
       }
     })
-  }
-
-  // ===========================================================================
-  // Binary Detection
-  // ===========================================================================
-
-  private isBinary(bytes: Uint8Array): boolean {
-    try {
-      new TextDecoder("utf-8", { fatal: true }).decode(bytes)
-      return false
-    } catch {
-      return true
-    }
   }
 
   // ===========================================================================
@@ -245,9 +265,9 @@ export class AutomergeFsMultiDoc {
     // If path points to an existing symlink, resolve it
     const existingRaw = this.getEntry(path)
     const normalized = existingRaw?.type === "symlink"
-      ? (this.resolveEntry(path)?.resolved ?? this.normalizePath(path))
-      : this.normalizePath(path)
-    const parentPath = this.getParentPath(normalized)
+      ? (this.resolveEntry(path)?.resolved ?? normalizePath(path))
+      : normalizePath(path)
+    const parentPath = getParentPath(normalized)
 
     const parent = this.getEntry(parentPath)
     if (!parent || parent.type !== "directory") {
@@ -257,10 +277,24 @@ export class AutomergeFsMultiDoc {
     const bytes =
       typeof content === "string" ? new TextEncoder().encode(content) : content
     const size = bytes.length
-    const binary = typeof content !== "string" && this.isBinary(bytes)
+    let binary = false
+    if (typeof content !== "string") {
+      try {
+        utf8Decoder.decode(bytes)
+      } catch {
+        binary = true
+      }
+    }
 
     const now = Date.now()
     const existing = this.getEntry(normalized)
+
+    const metadata = {
+      size,
+      mode: existing?.metadata.mode ?? 0o644,
+      mtime: now,
+      ctime: existing?.metadata.ctime ?? now,
+    }
 
     if (binary) {
       const blobHash = await this.createBlobHash(bytes)
@@ -273,13 +307,8 @@ export class AutomergeFsMultiDoc {
       this.setEntry(normalized, {
         type: "file",
         parent: parentPath,
-        name: this.getBasename(normalized),
-        metadata: {
-          size,
-          mode: existing?.metadata.mode ?? 0o644,
-          mtime: now,
-          ctime: existing?.metadata.ctime ?? now,
-        },
+        name: getBasename(normalized),
+        metadata,
         blobHash,
       })
     } else {
@@ -306,75 +335,30 @@ export class AutomergeFsMultiDoc {
       this.setEntry(normalized, {
         type: "file",
         parent: parentPath,
-        name: this.getBasename(normalized),
-        metadata: {
-          size,
-          mode: existing?.metadata.mode ?? 0o644,
-          mtime: now,
-          ctime: existing?.metadata.ctime ?? now,
-        },
+        name: getBasename(normalized),
+        metadata,
         fileDocId,
       })
     }
   }
 
-  stat(path: string): {
-    size: number
-    isFile: boolean
-    isDirectory: boolean
-    isSymbolicLink: boolean
-    mode: number
-    mtime: Date
-    ctime: Date
-  } {
+  stat(path: string): StatInfo {
     const result = this.resolveEntry(path)
     if (!result) {
       throw new Error(`ENOENT: no such file or directory: ${path}`)
     }
-    const { entry } = result
-
-    return {
-      size: entry.metadata.size,
-      isFile: entry.type === "file",
-      isDirectory: entry.type === "directory",
-      isSymbolicLink: false,
-      mode: entry.metadata.mode,
-      mtime: new Date(entry.metadata.mtime),
-      ctime: new Date(entry.metadata.ctime),
-    }
+    return toStatInfo(result.entry)
   }
 
-  lstat(path: string): {
-    size: number
-    isFile: boolean
-    isDirectory: boolean
-    isSymbolicLink: boolean
-    mode: number
-    mtime: Date
-    ctime: Date
-  } {
+  lstat(path: string): StatInfo {
     const entry = this.getEntry(path)
     if (!entry) {
       throw new Error(`ENOENT: no such file or directory: ${path}`)
     }
-
-    return {
-      size: entry.metadata.size,
-      isFile: entry.type === "file",
-      isDirectory: entry.type === "directory",
-      isSymbolicLink: entry.type === "symlink",
-      mode: entry.metadata.mode,
-      mtime: new Date(entry.metadata.mtime),
-      ctime: new Date(entry.metadata.ctime),
-    }
+    return toStatInfo(entry)
   }
 
-  readdir(path: string): Array<{
-    name: string
-    isFile: boolean
-    isDirectory: boolean
-    isSymbolicLink: boolean
-  }> {
+  readdir(path: string): DirEntry[] {
     const result = this.resolveEntry(path)
 
     if (!result) {
@@ -385,12 +369,7 @@ export class AutomergeFsMultiDoc {
     }
 
     const doc = this.handle.doc()
-    const entries: Array<{
-      name: string
-      isFile: boolean
-      isDirectory: boolean
-      isSymbolicLink: boolean
-    }> = []
+    const entries: DirEntry[] = []
 
     for (const [, entryData] of Object.entries(doc?.tree ?? {})) {
       if (entryData.parent === result.resolved) {
@@ -406,8 +385,8 @@ export class AutomergeFsMultiDoc {
     return entries
   }
 
-  async mkdir(path: string, options?: { recursive?: boolean }): Promise<void> {
-    const normalized = this.normalizePath(path)
+  mkdir(path: string, options?: { recursive?: boolean }): void {
+    const normalized = normalizePath(path)
 
     const existing = this.getEntry(normalized)
     if (existing) {
@@ -415,12 +394,12 @@ export class AutomergeFsMultiDoc {
       throw new Error(`EEXIST: file already exists: ${path}`)
     }
 
-    const parentPath = this.getParentPath(normalized)
+    const parentPath = getParentPath(normalized)
 
     const parent = this.getEntry(parentPath)
     if (!parent) {
       if (options?.recursive) {
-        await this.mkdir(parentPath, options)
+        this.mkdir(parentPath, options)
       } else {
         throw new Error(`ENOENT: no such file or directory: ${parentPath}`)
       }
@@ -432,7 +411,7 @@ export class AutomergeFsMultiDoc {
     this.setEntry(normalized, {
       type: "directory",
       parent: parentPath,
-      name: this.getBasename(normalized),
+      name: getBasename(normalized),
       metadata: {
         size: 0,
         mode: 0o755,
@@ -443,7 +422,7 @@ export class AutomergeFsMultiDoc {
   }
 
   async remove(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<void> {
-    const normalized = this.normalizePath(path)
+    const normalized = normalizePath(path)
     const entry = this.getEntry(normalized)
 
     if (!entry) {
@@ -455,9 +434,7 @@ export class AutomergeFsMultiDoc {
       if (options?.recursive) {
         const children = this.readdir(normalized)
         for (const child of children) {
-          const childPath =
-            normalized === "/" ? `/${child.name}` : `${normalized}/${child.name}`
-          await this.remove(childPath, options)
+          await this.remove(joinPath(normalized, child.name), options)
         }
       } else {
         const children = this.readdir(normalized)
@@ -492,8 +469,8 @@ export class AutomergeFsMultiDoc {
     }
 
     if (srcEntry.type === "file") {
-      const destNorm = this.normalizePath(newPath)
-      const parentPath = this.getParentPath(destNorm)
+      const destNorm = normalizePath(newPath)
+      const parentPath = getParentPath(destNorm)
       const parent = this.getEntry(parentPath)
       if (!parent || parent.type !== "directory") {
         throw new Error(`ENOENT: no such file or directory: ${parentPath}`)
@@ -503,7 +480,7 @@ export class AutomergeFsMultiDoc {
       const newEntry: TreeEntry = {
         type: srcEntry.type,
         parent: parentPath,
-        name: this.getBasename(destNorm),
+        name: getBasename(destNorm),
         metadata: {
           size: srcEntry.metadata.size,
           mode: srcEntry.metadata.mode,
@@ -518,9 +495,9 @@ export class AutomergeFsMultiDoc {
       this.deleteEntry(oldPath)
     } else {
       // Move directory: reparent all children in a single Automerge change
-      const srcNorm = this.normalizePath(oldPath)
-      const destNorm = this.normalizePath(newPath)
-      const destParent = this.getParentPath(destNorm)
+      const srcNorm = normalizePath(oldPath)
+      const destNorm = normalizePath(newPath)
+      const destParent = getParentPath(destNorm)
       const parent = this.getEntry(destParent)
       if (!parent || parent.type !== "directory") {
         throw new Error(`ENOENT: no such file or directory: ${destParent}`)
@@ -537,13 +514,13 @@ export class AutomergeFsMultiDoc {
           const relativePath = p === srcNorm ? "" : p.slice(srcNorm.length)
           const newP = destNorm + relativePath
           const newParentPath = relativePath
-            ? this.getParentPath(newP)
+            ? getParentPath(newP)
             : destParent
 
           doc.tree[newP] = {
             ...entry,
             parent: newParentPath,
-            name: this.getBasename(newP),
+            name: getBasename(newP),
           }
           delete doc.tree[p]
         }
@@ -564,13 +541,9 @@ export class AutomergeFsMultiDoc {
       await this.mkdir(dest, { recursive: true })
       const children = this.readdir(result.resolved)
       const srcNorm = result.resolved
-      const destNorm = this.normalizePath(dest)
+      const destNorm = normalizePath(dest)
       for (const child of children) {
-        const childSrc =
-          srcNorm === "/" ? `/${child.name}` : `${srcNorm}/${child.name}`
-        const childDest =
-          destNorm === "/" ? `/${child.name}` : `${destNorm}/${child.name}`
-        await this.copy(childSrc, childDest, options)
+        await this.copy(joinPath(srcNorm, child.name), joinPath(destNorm, child.name), options)
       }
     } else {
       throw new Error(`EISDIR: is a directory: ${src}`)
@@ -651,8 +624,8 @@ export class AutomergeFsMultiDoc {
   // ===========================================================================
 
   symlink(target: string, linkPath: string): void {
-    const normalized = this.normalizePath(linkPath)
-    const parentPath = this.getParentPath(normalized)
+    const normalized = normalizePath(linkPath)
+    const parentPath = getParentPath(normalized)
 
     const parent = this.getEntry(parentPath)
     if (!parent || parent.type !== "directory") {
@@ -668,7 +641,7 @@ export class AutomergeFsMultiDoc {
     this.setEntry(normalized, {
       type: "symlink",
       parent: parentPath,
-      name: this.getBasename(normalized),
+      name: getBasename(normalized),
       metadata: {
         size: target.length,
         mode: 0o777,
@@ -704,8 +677,8 @@ export class AutomergeFsMultiDoc {
       throw new Error(`EPERM: operation not permitted on a directory: ${existingPath}`)
     }
 
-    const normalized = this.normalizePath(newPath)
-    const parentPath = this.getParentPath(normalized)
+    const normalized = normalizePath(newPath)
+    const parentPath = getParentPath(normalized)
 
     const parent = this.getEntry(parentPath)
     if (!parent || parent.type !== "directory") {
@@ -721,7 +694,7 @@ export class AutomergeFsMultiDoc {
     const newEntry: TreeEntry = {
       type: "file",
       parent: parentPath,
-      name: this.getBasename(normalized),
+      name: getBasename(normalized),
       metadata: {
         size: result.entry.metadata.size,
         mode: result.entry.metadata.mode,

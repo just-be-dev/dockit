@@ -2,14 +2,14 @@ import { describe, expect, it } from "bun:test"
 import { Effect, Layer } from "effect"
 import { FileSystem } from "effect/FileSystem"
 import { Repo } from "@automerge/automerge-repo"
-import { AutomergeFsMultiDoc } from "./fs"
+import { AutomergeFs } from "./fs"
 import { InMemoryBlobStore } from "./blob-store"
-import { AutomergeFsFileSystem, AutomergeFsInstance, makeFs } from "./effect"
+import { AutomergeFsFileSystem, AutomergeFsInstance, InMemoryBlobStoreLayer, makeFs } from "./effect"
 
 function makeTestLayer() {
   return Layer.succeed(
     AutomergeFsInstance,
-    AutomergeFsMultiDoc.create({
+    AutomergeFs.create({
       repo: new Repo({ network: [] }),
       blobStore: new InMemoryBlobStore(),
     })
@@ -154,7 +154,9 @@ describe("AutomergeFs Effect FileSystem", () => {
   })
 
   it("makeFs convenience constructor works", async () => {
-    const layer = makeFs({ repo: new Repo({ network: [] }) })
+    const layer = makeFs({ repo: new Repo({ network: [] }) }).pipe(
+      Layer.provide(InMemoryBlobStoreLayer)
+    )
 
     const program = Effect.gen(function* () {
       const fs = yield* FileSystem
