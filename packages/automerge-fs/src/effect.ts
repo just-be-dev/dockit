@@ -153,8 +153,11 @@ export const AutomergeFsFileSystem: Layer.Layer<FileSystem, never, AutomergeFsIn
             catch: (e) => toSysError("chown", path, e),
           }),
 
-        link: (_fromPath, _toPath) =>
-          Effect.fail(badArg("link", "hard links are not supported in AutomergeFs")),
+        link: (existingPath, newPath) =>
+          Effect.try({
+            try: () => amfs.link(existingPath, newPath),
+            catch: (e) => toSysError("link", existingPath, e),
+          }),
 
         makeDirectory: (path, options) =>
           Effect.tryPromise({
@@ -263,7 +266,11 @@ export const AutomergeFsFileSystem: Layer.Layer<FileSystem, never, AutomergeFsIn
             catch: (e) => toSysError("readFile", path, e),
           }),
 
-        readLink: (path) => Effect.fail(notFound("readLink", path)),
+        readLink: (path) =>
+          Effect.try({
+            try: () => amfs.readlink(path),
+            catch: (e) => toSysError("readLink", path, e),
+          }),
 
         realPath: (path) => Effect.succeed(normPath(path)),
 
@@ -303,8 +310,11 @@ export const AutomergeFsFileSystem: Layer.Layer<FileSystem, never, AutomergeFsIn
             catch: (e) => toSysError("stat", path, e),
           }),
 
-        symlink: (_fromPath, _toPath) =>
-          Effect.fail(badArg("symlink", "symbolic links are not supported in AutomergeFs")),
+        symlink: (target, linkPath) =>
+          Effect.try({
+            try: () => amfs.symlink(target, linkPath),
+            catch: (e) => toSysError("symlink", linkPath, e),
+          }),
 
         truncate: (path, length) =>
           Effect.tryPromise({

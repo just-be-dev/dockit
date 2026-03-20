@@ -19,7 +19,7 @@ interface FsRootDoc {
 }
 
 interface TreeEntry {
-  type: "file" | "directory"
+  type: "file" | "directory" | "symlink"
   parent: string | null
   name: string
   metadata: {
@@ -30,6 +30,7 @@ interface TreeEntry {
   }
   fileDocId?: string
   blobHash?: string
+  symlinkTarget?: string
 }
 
 interface FileDoc {
@@ -108,6 +109,44 @@ export class AutomergeFsMultiDoc {
   }
 
   // ===========================================================================
+  // Symlink Resolution
+  // ===========================================================================
+
+  private static readonly MAX_SYMLINK_DEPTH = 40
+
+  /**
+   * Resolve a path by following any symlink at the final component.
+   * Returns the resolved path and its (non-symlink) entry, or null if not found.
+   * Throws ELOOP on symlink cycles.
+   */
+  private resolveEntry(path: string): { resolved: string; entry: TreeEntry } | null {
+    let current = this.normalizePath(path)
+    const seen = new Set<string>()
+
+    for (let i = 0; i < AutomergeFsMultiDoc.MAX_SYMLINK_DEPTH; i++) {
+      const entry = this.getEntry(current)
+      if (!entry) return null
+      if (entry.type !== "symlink" || !entry.symlinkTarget) {
+        return { resolved: current, entry }
+      }
+      if (seen.has(current)) {
+        throw new Error(`ELOOP: too many levels of symbolic links: ${path}`)
+      }
+      seen.add(current)
+      const target = entry.symlinkTarget
+      if (target.startsWith("/")) {
+        current = this.normalizePath(target)
+      } else {
+        const parent = this.getParentPath(current)
+        current = this.normalizePath(
+          parent === "/" ? `/${target}` : `${parent}/${target}`
+        )
+      }
+    }
+    throw new Error(`ELOOP: too many levels of symbolic links: ${path}`)
+  }
+
+  // ===========================================================================
   // Entry Management
   // ===========================================================================
 
@@ -176,10 +215,11 @@ export class AutomergeFsMultiDoc {
   // ===========================================================================
 
   async readFile(path: string): Promise<Uint8Array> {
-    const entry = this.getEntry(path)
-    if (!entry) {
+    const result = this.resolveEntry(path)
+    if (!result) {
       throw new Error(`ENOENT: no such file or directory: ${path}`)
     }
+    const { entry } = result
     if (entry.type !== "file") {
       throw new Error(`EISDIR: illegal operation on a directory: ${path}`)
     }
@@ -202,7 +242,11 @@ export class AutomergeFsMultiDoc {
   }
 
   async writeFile(path: string, content: string | Uint8Array): Promise<void> {
-    const normalized = this.normalizePath(path)
+    // If path points to an existing symlink, resolve it
+    const existingRaw = this.getEntry(path)
+    const normalized = existingRaw?.type === "symlink"
+      ? (this.resolveEntry(path)?.resolved ?? this.normalizePath(path))
+      : this.normalizePath(path)
     const parentPath = this.getParentPath(normalized)
 
     const parent = this.getEntry(parentPath)
@@ -278,6 +322,33 @@ export class AutomergeFsMultiDoc {
     size: number
     isFile: boolean
     isDirectory: boolean
+    isSymbolicLink: boolean
+    mode: number
+    mtime: Date
+    ctime: Date
+  } {
+    const result = this.resolveEntry(path)
+    if (!result) {
+      throw new Error(`ENOENT: no such file or directory: ${path}`)
+    }
+    const { entry } = result
+
+    return {
+      size: entry.metadata.size,
+      isFile: entry.type === "file",
+      isDirectory: entry.type === "directory",
+      isSymbolicLink: false,
+      mode: entry.metadata.mode,
+      mtime: new Date(entry.metadata.mtime),
+      ctime: new Date(entry.metadata.ctime),
+    }
+  }
+
+  lstat(path: string): {
+    size: number
+    isFile: boolean
+    isDirectory: boolean
+    isSymbolicLink: boolean
     mode: number
     mtime: Date
     ctime: Date
@@ -291,32 +362,43 @@ export class AutomergeFsMultiDoc {
       size: entry.metadata.size,
       isFile: entry.type === "file",
       isDirectory: entry.type === "directory",
+      isSymbolicLink: entry.type === "symlink",
       mode: entry.metadata.mode,
       mtime: new Date(entry.metadata.mtime),
       ctime: new Date(entry.metadata.ctime),
     }
   }
 
-  readdir(path: string): Array<{ name: string; isFile: boolean; isDirectory: boolean }> {
-    const normalized = this.normalizePath(path)
-    const entry = this.getEntry(normalized)
+  readdir(path: string): Array<{
+    name: string
+    isFile: boolean
+    isDirectory: boolean
+    isSymbolicLink: boolean
+  }> {
+    const result = this.resolveEntry(path)
 
-    if (!entry) {
+    if (!result) {
       throw new Error(`ENOENT: no such file or directory: ${path}`)
     }
-    if (entry.type !== "directory") {
+    if (result.entry.type !== "directory") {
       throw new Error(`ENOTDIR: not a directory: ${path}`)
     }
 
     const doc = this.handle.doc()
-    const entries: Array<{ name: string; isFile: boolean; isDirectory: boolean }> = []
+    const entries: Array<{
+      name: string
+      isFile: boolean
+      isDirectory: boolean
+      isSymbolicLink: boolean
+    }> = []
 
     for (const [, entryData] of Object.entries(doc?.tree ?? {})) {
-      if (entryData.parent === normalized) {
+      if (entryData.parent === result.resolved) {
         entries.push({
           name: entryData.name,
           isFile: entryData.type === "file",
           isDirectory: entryData.type === "directory",
+          isSymbolicLink: entryData.type === "symlink",
         })
       }
     }
@@ -386,17 +468,21 @@ export class AutomergeFsMultiDoc {
     }
 
     if (entry.type === "file" && entry.blobHash) {
-      await this.blobStore.delete(entry.blobHash)
+      if (!this.hasOtherReferences(normalized, "blobHash", entry.blobHash)) {
+        await this.blobStore.delete(entry.blobHash)
+      }
     }
     if (entry.type === "file" && entry.fileDocId) {
-      this.fileHandles.delete(entry.fileDocId)
+      if (!this.hasOtherReferences(normalized, "fileDocId", entry.fileDocId)) {
+        this.fileHandles.delete(entry.fileDocId)
+      }
     }
 
     this.deleteEntry(normalized)
   }
 
   exists(path: string): boolean {
-    return this.getEntry(path) !== null
+    return this.resolveEntry(path) !== null
   }
 
   async rename(oldPath: string, newPath: string): Promise<void> {
@@ -466,18 +552,18 @@ export class AutomergeFsMultiDoc {
   }
 
   async copy(src: string, dest: string, options?: { recursive?: boolean }): Promise<void> {
-    const srcEntry = this.getEntry(src)
-    if (!srcEntry) {
+    const result = this.resolveEntry(src)
+    if (!result) {
       throw new Error(`ENOENT: no such file or directory: ${src}`)
     }
 
-    if (srcEntry.type === "file") {
-      const content = await this.readFile(src)
+    if (result.entry.type === "file") {
+      const content = await this.readFile(result.resolved)
       await this.writeFile(dest, content)
-    } else if (srcEntry.type === "directory" && (options?.recursive ?? true)) {
+    } else if (result.entry.type === "directory" && (options?.recursive ?? true)) {
       await this.mkdir(dest, { recursive: true })
-      const children = this.readdir(src)
-      const srcNorm = this.normalizePath(src)
+      const children = this.readdir(result.resolved)
+      const srcNorm = result.resolved
       const destNorm = this.normalizePath(dest)
       for (const child of children) {
         const childSrc =
@@ -492,50 +578,161 @@ export class AutomergeFsMultiDoc {
   }
 
   chmod(path: string, mode: number): void {
-    const normalized = this.normalizePath(path)
-    const entry = this.getEntry(normalized)
-    if (!entry) {
+    const result = this.resolveEntry(path)
+    if (!result) {
       throw new Error(`ENOENT: no such file or directory: ${path}`)
     }
 
+    const resolved = result.resolved
     this.handle.change((doc) => {
-      if (doc.tree[normalized]) {
-        doc.tree[normalized].metadata.mode = mode
+      const entry = doc.tree[resolved]
+      if (entry) {
+        entry.metadata.mode = mode
       }
     })
   }
 
   utimes(path: string, _atime: number | Date, mtime: number | Date): void {
-    const normalized = this.normalizePath(path)
-    const entry = this.getEntry(normalized)
-    if (!entry) {
+    const result = this.resolveEntry(path)
+    if (!result) {
       throw new Error(`ENOENT: no such file or directory: ${path}`)
     }
 
+    const resolved = result.resolved
     const mtimeMs = typeof mtime === "number" ? mtime : mtime.getTime()
     this.handle.change((doc) => {
-      if (doc.tree[normalized]) {
-        doc.tree[normalized].metadata.mtime = mtimeMs
+      const entry = doc.tree[resolved]
+      if (entry) {
+        entry.metadata.mtime = mtimeMs
       }
     })
   }
 
   async truncate(path: string, length = 0): Promise<void> {
-    const normalized = this.normalizePath(path)
-    const entry = this.getEntry(normalized)
-    if (!entry) {
+    const result = this.resolveEntry(path)
+    if (!result) {
       throw new Error(`ENOENT: no such file or directory: ${path}`)
     }
-    if (entry.type !== "file") {
+    if (result.entry.type !== "file") {
       throw new Error(`EISDIR: illegal operation on a directory: ${path}`)
     }
 
     if (length === 0) {
-      await this.writeFile(normalized, "")
+      await this.writeFile(result.resolved, "")
     } else {
-      const content = await this.readFile(normalized)
-      await this.writeFile(normalized, content.slice(0, length))
+      const content = await this.readFile(result.resolved)
+      await this.writeFile(result.resolved, content.slice(0, length))
     }
+  }
+
+  // ===========================================================================
+  // Reference Counting
+  // ===========================================================================
+
+  /**
+   * Check whether any tree entry OTHER than `excludePath` references the given
+   * fileDocId or blobHash. Used to decide if cleanup is safe on remove.
+   */
+  private hasOtherReferences(
+    excludePath: string,
+    key: "fileDocId" | "blobHash",
+    value: string
+  ): boolean {
+    const doc = this.handle.doc()
+    if (!doc?.tree) return false
+    for (const [p, entry] of Object.entries(doc.tree)) {
+      if (p !== excludePath && entry[key] === value) return true
+    }
+    return false
+  }
+
+  // ===========================================================================
+  // Symlink Operations
+  // ===========================================================================
+
+  symlink(target: string, linkPath: string): void {
+    const normalized = this.normalizePath(linkPath)
+    const parentPath = this.getParentPath(normalized)
+
+    const parent = this.getEntry(parentPath)
+    if (!parent || parent.type !== "directory") {
+      throw new Error(`ENOENT: no such file or directory: ${parentPath}`)
+    }
+
+    const existing = this.getEntry(normalized)
+    if (existing) {
+      throw new Error(`EEXIST: file already exists: ${linkPath}`)
+    }
+
+    const now = Date.now()
+    this.setEntry(normalized, {
+      type: "symlink",
+      parent: parentPath,
+      name: this.getBasename(normalized),
+      metadata: {
+        size: target.length,
+        mode: 0o777,
+        mtime: now,
+        ctime: now,
+      },
+      symlinkTarget: target,
+    })
+  }
+
+  readlink(path: string): string {
+    const entry = this.getEntry(path)
+    if (!entry) {
+      throw new Error(`ENOENT: no such file or directory: ${path}`)
+    }
+    if (entry.type !== "symlink" || !entry.symlinkTarget) {
+      throw new Error(`EINVAL: invalid argument: ${path}`)
+    }
+    return entry.symlinkTarget
+  }
+
+  /**
+   * Create a hard link. Both paths share the same underlying fileDocId/blobHash,
+   * so writes through either path are visible through both, and removing one
+   * does not affect the other.
+   */
+  link(existingPath: string, newPath: string): void {
+    const result = this.resolveEntry(existingPath)
+    if (!result) {
+      throw new Error(`ENOENT: no such file or directory: ${existingPath}`)
+    }
+    if (result.entry.type !== "file") {
+      throw new Error(`EPERM: operation not permitted on a directory: ${existingPath}`)
+    }
+
+    const normalized = this.normalizePath(newPath)
+    const parentPath = this.getParentPath(normalized)
+
+    const parent = this.getEntry(parentPath)
+    if (!parent || parent.type !== "directory") {
+      throw new Error(`ENOENT: no such file or directory: ${parentPath}`)
+    }
+
+    const existing = this.getEntry(normalized)
+    if (existing) {
+      throw new Error(`EEXIST: file already exists: ${newPath}`)
+    }
+
+    const now = Date.now()
+    const newEntry: TreeEntry = {
+      type: "file",
+      parent: parentPath,
+      name: this.getBasename(normalized),
+      metadata: {
+        size: result.entry.metadata.size,
+        mode: result.entry.metadata.mode,
+        mtime: now,
+        ctime: result.entry.metadata.ctime,
+      },
+    }
+    if (result.entry.fileDocId) newEntry.fileDocId = result.entry.fileDocId
+    if (result.entry.blobHash) newEntry.blobHash = result.entry.blobHash
+
+    this.setEntry(normalized, newEntry)
   }
 
   // ===========================================================================

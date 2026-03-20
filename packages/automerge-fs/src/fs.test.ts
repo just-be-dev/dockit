@@ -131,4 +131,136 @@ describe("AutomergeFsMultiDoc direct API", () => {
     const read = await fs.readFile("/bin.dat")
     expect(read).toEqual(binary)
   })
+
+  it("symlink and readlink round-trip", async () => {
+    const fs = makeFs()
+    await fs.writeFile("/target.txt", "hello")
+    fs.symlink("/target.txt", "/link.txt")
+    expect(fs.readlink("/link.txt")).toBe("/target.txt")
+  })
+
+  it("readFile follows symlinks", async () => {
+    const fs = makeFs()
+    await fs.writeFile("/real.txt", "content")
+    fs.symlink("/real.txt", "/alias.txt")
+    const content = new TextDecoder().decode(await fs.readFile("/alias.txt"))
+    expect(content).toBe("content")
+  })
+
+  it("writeFile through symlink updates target", async () => {
+    const fs = makeFs()
+    await fs.writeFile("/real.txt", "original")
+    fs.symlink("/real.txt", "/link.txt")
+    await fs.writeFile("/link.txt", "updated")
+    const content = new TextDecoder().decode(await fs.readFile("/real.txt"))
+    expect(content).toBe("updated")
+  })
+
+  it("stat follows symlinks", async () => {
+    const fs = makeFs()
+    await fs.writeFile("/real.txt", "hello")
+    fs.symlink("/real.txt", "/link.txt")
+    const s = fs.stat("/link.txt")
+    expect(s.isFile).toBe(true)
+    expect(s.isSymbolicLink).toBe(false)
+    expect(s.size).toBe(5)
+  })
+
+  it("lstat reports symlink type", async () => {
+    const fs = makeFs()
+    await fs.writeFile("/real.txt", "hello")
+    fs.symlink("/real.txt", "/link.txt")
+    const s = fs.lstat("/link.txt")
+    expect(s.isSymbolicLink).toBe(true)
+    expect(s.isFile).toBe(false)
+  })
+
+  it("symlink with relative target", async () => {
+    const fs = makeFs()
+    await fs.mkdir("/dir")
+    await fs.writeFile("/dir/real.txt", "data")
+    fs.symlink("real.txt", "/dir/link.txt")
+    const content = new TextDecoder().decode(await fs.readFile("/dir/link.txt"))
+    expect(content).toBe("data")
+  })
+
+  it("remove on symlink deletes the link not the target", async () => {
+    const fs = makeFs()
+    await fs.writeFile("/real.txt", "keep me")
+    fs.symlink("/real.txt", "/link.txt")
+    await fs.remove("/link.txt")
+    expect(fs.exists("/link.txt")).toBe(false)
+    expect(fs.exists("/real.txt")).toBe(true)
+  })
+
+  it("dangling symlink: exists returns false", async () => {
+    const fs = makeFs()
+    fs.symlink("/nonexistent", "/dangling")
+    expect(fs.exists("/dangling")).toBe(false)
+  })
+
+  it("symlink chain is followed", async () => {
+    const fs = makeFs()
+    await fs.writeFile("/real.txt", "deep")
+    fs.symlink("/real.txt", "/link1")
+    fs.symlink("/link1", "/link2")
+    const content = new TextDecoder().decode(await fs.readFile("/link2"))
+    expect(content).toBe("deep")
+  })
+
+  it("hard link shares underlying data", async () => {
+    const fs = makeFs()
+    await fs.writeFile("/orig.txt", "shared data")
+    fs.link("/orig.txt", "/hardlink.txt")
+    const content = new TextDecoder().decode(await fs.readFile("/hardlink.txt"))
+    expect(content).toBe("shared data")
+  })
+
+  it("hard link survives removal of original", async () => {
+    const fs = makeFs()
+    await fs.writeFile("/orig.txt", "persist")
+    fs.link("/orig.txt", "/hardlink.txt")
+    await fs.remove("/orig.txt")
+    expect(fs.exists("/orig.txt")).toBe(false)
+    const content = new TextDecoder().decode(await fs.readFile("/hardlink.txt"))
+    expect(content).toBe("persist")
+  })
+
+  it("hard link sees writes through either path", async () => {
+    const fs = makeFs()
+    await fs.writeFile("/a.txt", "v1")
+    fs.link("/a.txt", "/b.txt")
+    await fs.writeFile("/b.txt", "v2")
+    const contentA = new TextDecoder().decode(await fs.readFile("/a.txt"))
+    const contentB = new TextDecoder().decode(await fs.readFile("/b.txt"))
+    expect(contentA).toBe("v2")
+    expect(contentB).toBe("v2")
+  })
+
+  it("hard link on directory throws EPERM", async () => {
+    const fs = makeFs()
+    await fs.mkdir("/dir")
+    expect(() => fs.link("/dir", "/dir2")).toThrow("EPERM")
+  })
+
+  it("hard link on binary file survives removal of original", async () => {
+    const fs = makeFs()
+    const binary = new Uint8Array([0x00, 0x01, 0xff, 0xfe, 0x80])
+    await fs.writeFile("/bin.dat", binary)
+    fs.link("/bin.dat", "/bin-link.dat")
+    await fs.remove("/bin.dat")
+    const read = await fs.readFile("/bin-link.dat")
+    expect(read).toEqual(binary)
+  })
+
+  it("readdir includes symlinks", async () => {
+    const fs = makeFs()
+    await fs.mkdir("/dir")
+    await fs.writeFile("/dir/file.txt", "x")
+    fs.symlink("/dir/file.txt", "/dir/link.txt")
+    const entries = fs.readdir("/dir")
+    const link = entries.find((e) => e.name === "link.txt")
+    expect(link?.isSymbolicLink).toBe(true)
+    expect(link?.isFile).toBe(false)
+  })
 })
