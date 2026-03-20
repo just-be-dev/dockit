@@ -9,10 +9,13 @@
   },
   "dependencies": {
     "@automerge/automerge": "^3.0.0",
-    "@automerge/automerge-repo": "*",
+    "@automerge/automerge-repo": "*"
+  },
+  "optionalDependencies": {
     "effect": "4.0.0-beta.35"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "effect": "4.0.0-beta.35"
   }
 }
