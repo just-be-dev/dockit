@@ -1,4 +1,4 @@
-export { AutomergeFs, normalizePath, joinPath, type StatInfo, type DirEntry, type FileDoc } from "./fs"
+export { AutomergeFs, normalizePath, joinPath, type StatInfo, type DirEntry } from "./fs"
 export { type BlobStore, InMemoryBlobStore } from "./blob-store"
 export { FileTypeRegistry, type FileType, type FileTypeContext } from "./file-types"
 export { textFileType, type TextFileDoc } from "./file-types/text"

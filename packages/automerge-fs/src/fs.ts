@@ -38,17 +38,9 @@ interface FsNode {
     ctime: number
   }
   fileDocId?: string
-  /** @deprecated Legacy field — kept for backward compat with existing docs. */
-  blobHash?: string
   fileType?: string
   symlinkTarget?: string
 }
-
-/**
- * @deprecated Use `TextFileDoc` from `./file-types/text` instead.
- * Kept as an alias for backward compatibility.
- */
-export type FileDoc = TextFileDoc
 
 export interface StatInfo {
   size: number
@@ -274,18 +266,11 @@ export class AutomergeFs {
     return { repo: this.repo, blobStore: this.blobStore }
   }
 
-  /**
-   * Resolve the FileType for an existing tree entry.
-   * Falls back to legacy detection for entries without a fileType field.
-   */
+  /** Resolve the FileType for an existing tree entry. */
   private resolveFileType(entry: FsNode): FileType {
     if (entry.fileType) {
       const ft = this.registry.get(entry.fileType)
       if (ft) return ft
-    }
-    // Legacy: entries with blobHash but no fileType are blobs
-    if (entry.blobHash) {
-      return this.registry.get("blob") ?? this.registry.get("text")!
     }
     return this.registry.get("text")!
   }
@@ -302,15 +287,6 @@ export class AutomergeFs {
     const { entry } = result
     if (entry.type !== "file") {
       throw new Error(`EISDIR: illegal operation on a directory: ${path}`)
-    }
-
-    // Legacy path: old-style blobHash entries without a fileDocId
-    if (entry.blobHash && !entry.fileDocId) {
-      const blob = await this.blobStore.get(entry.blobHash)
-      if (!blob) {
-        throw new Error(`Blob not found: ${entry.blobHash}`)
-      }
-      return blob
     }
 
     if (entry.fileDocId) {
@@ -381,10 +357,6 @@ export class AutomergeFs {
       // Clean up old doc handle reference
       if (existing?.fileDocId) {
         this.fileHandles.delete(existing.fileDocId)
-      }
-      // Clean up legacy blobHash
-      if (existing?.blobHash) {
-        await this.blobStore.delete(existing.blobHash)
       }
 
       this.setEntry(normalized, {
@@ -500,14 +472,8 @@ export class AutomergeFs {
       }
     }
 
-    // Legacy cleanup for old-style blobHash entries
-    if (entry.type === "file" && entry.blobHash) {
-      if (!this.hasOtherReferences(normalized, "blobHash", entry.blobHash)) {
-        await this.blobStore.delete(entry.blobHash)
-      }
-    }
     if (entry.type === "file" && entry.fileDocId) {
-      if (!this.hasOtherReferences(normalized, "fileDocId", entry.fileDocId)) {
+      if (!this.hasOtherFileDocRef(normalized, entry.fileDocId)) {
         this.fileHandles.delete(entry.fileDocId)
       }
     }
@@ -546,7 +512,6 @@ export class AutomergeFs {
         },
       }
       if (srcEntry.fileDocId) newEntry.fileDocId = srcEntry.fileDocId
-      if (srcEntry.blobHash) newEntry.blobHash = srcEntry.blobHash
       if (srcEntry.fileType) newEntry.fileType = srcEntry.fileType
 
       this.setEntry(destNorm, newEntry)
@@ -662,17 +627,13 @@ export class AutomergeFs {
 
   /**
    * Check whether any tree entry OTHER than `excludePath` references the given
-   * fileDocId or blobHash. Used to decide if cleanup is safe on remove.
+   * fileDocId. Used to decide if cleanup is safe on remove.
    */
-  private hasOtherReferences(
-    excludePath: string,
-    key: "fileDocId" | "blobHash",
-    value: string
-  ): boolean {
+  private hasOtherFileDocRef(excludePath: string, fileDocId: string): boolean {
     const doc = this.handle.doc()
     if (!doc?.tree) return false
     for (const [p, entry] of Object.entries(doc.tree)) {
-      if (p !== excludePath && entry[key] === value) return true
+      if (p !== excludePath && entry.fileDocId === fileDocId) return true
     }
     return false
   }
@@ -761,7 +722,6 @@ export class AutomergeFs {
       },
     }
     if (result.entry.fileDocId) newEntry.fileDocId = result.entry.fileDocId
-    if (result.entry.blobHash) newEntry.blobHash = result.entry.blobHash
     if (result.entry.fileType) newEntry.fileType = result.entry.fileType
 
     this.setEntry(normalized, newEntry)
@@ -867,7 +827,7 @@ export class AutomergeFs {
    * direct access to the CRDT document.
    * Throws if the path doesn't exist or isn't a file.
    */
-  async getFileDocHandle(path: string): Promise<DocHandle<FileDoc>> {
+  async getFileDocHandle(path: string): Promise<DocHandle<TextFileDoc>> {
     const result = this.resolveEntry(path)
     if (!result) {
       throw new Error(`ENOENT: no such file or directory: ${path}`)
@@ -879,6 +839,6 @@ export class AutomergeFs {
     if (!entry.fileDocId) {
       throw new Error(`No document handle for file: ${path}`)
     }
-    return this.getOrLoadFileHandle<FileDoc>(entry.fileDocId)
+    return this.getOrLoadFileHandle<TextFileDoc>(entry.fileDocId)
   }
 }
