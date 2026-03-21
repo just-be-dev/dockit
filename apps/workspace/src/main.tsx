@@ -3,7 +3,7 @@ import ReactDOM from "react-dom/client"
 import { Repo } from "@automerge/automerge-repo"
 import { IndexedDBStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb"
 import { App } from "./App"
-import { AutomergeFs, InMemoryBlobStore } from "@just-be/automerge-fs"
+import { AutomergeFs, InMemoryBlobStore, createBlobFileType } from "@just-be/automerge-fs"
 
 const STORAGE_KEY = "automerge-fs-root-doc-url"
 
@@ -19,8 +19,8 @@ async function initFs(): Promise<AutomergeFs> {
     try {
       return await AutomergeFs.load({
         repo,
-        blobStore: new InMemoryBlobStore(),
         rootDocUrl: savedUrl,
+        fileTypes: [createBlobFileType(new InMemoryBlobStore())],
       })
     } catch {
       // Stored URL invalid — fall through to create fresh
@@ -30,7 +30,7 @@ async function initFs(): Promise<AutomergeFs> {
 
   const fs = AutomergeFs.create({
     repo,
-    blobStore: new InMemoryBlobStore(),
+    fileTypes: [createBlobFileType(new InMemoryBlobStore())],
   })
 
   localStorage.setItem(STORAGE_KEY, fs.rootDocUrl)

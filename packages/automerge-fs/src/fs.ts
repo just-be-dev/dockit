@@ -5,19 +5,17 @@
  * depends on the file's type — a pluggable FileType registry controls how
  * content is read from / written to the backing doc.
  *
- * Built-in types:
- * - "text" — stores content as a string with updateText() for CRDT merging
- * - "blob" — stores a blobRef hash pointing into a BlobStore
+ * The built-in "text" type stores content as a string with updateText() for
+ * CRDT merging. Additional types (e.g. blob) can be registered via the
+ * `fileTypes` option.
  *
  * Directory tree structure is maintained in a single root document.
  */
 
 import * as Automerge from "@automerge/automerge"
 import { Repo, type DocHandle, type AutomergeUrl } from "@automerge/automerge-repo"
-import type { BlobStore } from "./blob-store"
-import { FileTypeRegistry, type FileType, type FileTypeContext } from "./file-types"
+import { FileTypeRegistry, type FileType } from "./file-types"
 import { textFileType, type TextFileDoc } from "./file-types/text"
-import { blobFileType } from "./file-types/blob"
 
 // =============================================================================
 // Document Schema
@@ -104,36 +102,31 @@ function toStatInfo(entry: FsNode): StatInfo {
 export class AutomergeFs {
   private handle: DocHandle<FsTree>
   private repo: Repo
-  private blobStore: BlobStore
   private fileHandles: Map<string, DocHandle<any>> = new Map()
   private registry: FileTypeRegistry
 
   private constructor(
     handle: DocHandle<FsTree>,
     repo: Repo,
-    blobStore: BlobStore,
     registry: FileTypeRegistry,
   ) {
     this.handle = handle
     this.repo = repo
-    this.blobStore = blobStore
     this.registry = registry
   }
 
-  private static defaultRegistry(extra?: FileType[]): FileTypeRegistry {
+  private static buildRegistry(fileTypes?: FileType[]): FileTypeRegistry {
     const registry = new FileTypeRegistry()
     // Text first — it's the fallback default
     registry.register(textFileType)
-    registry.register(blobFileType)
-    if (extra) {
-      for (const ft of extra) registry.register(ft)
+    if (fileTypes) {
+      for (const ft of fileTypes) registry.register(ft)
     }
     return registry
   }
 
   static create(opts: {
     repo: Repo
-    blobStore: BlobStore
     fileTypes?: FileType[]
   }): AutomergeFs {
     const handle = opts.repo.create<FsTree>()
@@ -154,14 +147,12 @@ export class AutomergeFs {
     return new AutomergeFs(
       handle,
       opts.repo,
-      opts.blobStore,
-      AutomergeFs.defaultRegistry(opts.fileTypes),
+      AutomergeFs.buildRegistry(opts.fileTypes),
     )
   }
 
   static async load(opts: {
     repo: Repo
-    blobStore: BlobStore
     rootDocUrl: string
     fileTypes?: FileType[]
   }): Promise<AutomergeFs> {
@@ -170,8 +161,7 @@ export class AutomergeFs {
     return new AutomergeFs(
       handle,
       opts.repo,
-      opts.blobStore,
-      AutomergeFs.defaultRegistry(opts.fileTypes),
+      AutomergeFs.buildRegistry(opts.fileTypes),
     )
   }
 
@@ -262,10 +252,6 @@ export class AutomergeFs {
     return handle as DocHandle<T>
   }
 
-  private fileTypeContext(): FileTypeContext {
-    return { repo: this.repo, blobStore: this.blobStore }
-  }
-
   /** Resolve the FileType for an existing tree entry. */
   private resolveFileType(entry: FsNode): FileType {
     if (entry.fileType) {
@@ -292,7 +278,7 @@ export class AutomergeFs {
     if (entry.fileDocId) {
       const ft = this.resolveFileType(entry)
       const handle = await this.getOrLoadFileHandle(entry.fileDocId)
-      return ft.read(handle, this.fileTypeContext())
+      return ft.read(handle)
     }
 
     return new Uint8Array(0)
@@ -334,12 +320,10 @@ export class AutomergeFs {
       ft = this.registry.resolve(normalized, bytes)
     }
 
-    const ctx = this.fileTypeContext()
-
     if (existing?.fileDocId && existing.fileType === ft.name) {
       // Same file type — update in place
       const handle = await this.getOrLoadFileHandle(existing.fileDocId)
-      await ft.write(handle, bytes, ctx)
+      await ft.write(handle, bytes)
 
       this.setEntry(normalized, {
         type: "file",
@@ -351,7 +335,7 @@ export class AutomergeFs {
       })
     } else {
       // New file or type changed — create a new doc
-      const handle = await ft.createDoc(this.repo, bytes, ctx)
+      const handle = await ft.createDoc(this.repo, bytes)
       this.fileHandles.set(handle.url, handle)
 
       // Clean up old doc handle reference

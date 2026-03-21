@@ -1,12 +1,16 @@
 /**
  * Blob file type.
  *
- * Stores binary data in the BlobStore and keeps a reference (hash) in the
+ * Stores binary data in a BlobStore and keeps a reference (hash) in the
  * Automerge document. The doc itself is lightweight — just a pointer.
+ *
+ * Use `createBlobFileType(blobStore)` to create an instance that closes
+ * over the blob store. The fs itself doesn't know about blob storage.
  */
 
 import type { Repo, DocHandle } from "@automerge/automerge-repo"
-import type { FileType, FileTypeContext } from "../file-types"
+import type { BlobStore } from "../../blob-store"
+import type { FileType } from "../file-types"
 
 export interface BlobFileDoc {
   blobRef: string
@@ -19,67 +23,56 @@ async function createBlobHash(data: Uint8Array): Promise<string> {
     .join("")
 }
 
-export const blobFileType: FileType<BlobFileDoc> = {
-  name: "blob",
-  extensions: [],
+export function createBlobFileType(blobStore: BlobStore): FileType<BlobFileDoc> {
+  return {
+    name: "blob",
+    extensions: [],
 
-  match(_path: string, content: Uint8Array): boolean {
-    // Claim any file whose content is NOT valid UTF-8 (binary)
-    try {
-      new TextDecoder("utf-8", { fatal: true }).decode(content)
-      return false
-    } catch {
-      return true
-    }
-  },
+    match(_path: string, content: Uint8Array): boolean {
+      try {
+        new TextDecoder("utf-8", { fatal: true }).decode(content)
+        return false
+      } catch {
+        return true
+      }
+    },
 
-  async createDoc(
-    repo: Repo,
-    content: Uint8Array,
-    ctx: FileTypeContext,
-  ): Promise<DocHandle<BlobFileDoc>> {
-    const hash = await createBlobHash(content)
-    await ctx.blobStore.set(hash, content)
+    async createDoc(repo: Repo, content: Uint8Array): Promise<DocHandle<BlobFileDoc>> {
+      const hash = await createBlobHash(content)
+      await blobStore.set(hash, content)
 
-    const handle = repo.create<BlobFileDoc>()
-    handle.change((doc) => {
-      doc.blobRef = hash
-    })
-    return handle
-  },
+      const handle = repo.create<BlobFileDoc>()
+      handle.change((doc) => {
+        doc.blobRef = hash
+      })
+      return handle
+    },
 
-  async write(
-    handle: DocHandle<BlobFileDoc>,
-    content: Uint8Array,
-    ctx: FileTypeContext,
-  ): Promise<void> {
-    const oldDoc = handle.doc()
-    const oldHash = oldDoc?.blobRef
+    async write(handle: DocHandle<BlobFileDoc>, content: Uint8Array): Promise<void> {
+      const oldDoc = handle.doc()
+      const oldHash = oldDoc?.blobRef
 
-    const hash = await createBlobHash(content)
-    await ctx.blobStore.set(hash, content)
+      const hash = await createBlobHash(content)
+      await blobStore.set(hash, content)
 
-    handle.change((doc) => {
-      doc.blobRef = hash
-    })
+      handle.change((doc) => {
+        doc.blobRef = hash
+      })
 
-    // Clean up old blob if hash changed
-    if (oldHash && oldHash !== hash) {
-      await ctx.blobStore.delete(oldHash)
-    }
-  },
+      if (oldHash && oldHash !== hash) {
+        await blobStore.delete(oldHash)
+      }
+    },
 
-  async read(
-    handle: DocHandle<BlobFileDoc>,
-    ctx: FileTypeContext,
-  ): Promise<Uint8Array> {
-    const doc = handle.doc()
-    if (!doc?.blobRef) return new Uint8Array(0)
+    async read(handle: DocHandle<BlobFileDoc>): Promise<Uint8Array> {
+      const doc = handle.doc()
+      if (!doc?.blobRef) return new Uint8Array(0)
 
-    const blob = await ctx.blobStore.get(doc.blobRef)
-    if (!blob) {
-      throw new Error(`Blob not found: ${doc.blobRef}`)
-    }
-    return blob
-  },
+      const blob = await blobStore.get(doc.blobRef)
+      if (!blob) {
+        throw new Error(`Blob not found: ${doc.blobRef}`)
+      }
+      return blob
+    },
+  }
 }

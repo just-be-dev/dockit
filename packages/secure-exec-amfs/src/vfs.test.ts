@@ -1,12 +1,12 @@
 import { describe, expect, it } from "bun:test"
 import { Repo } from "@automerge/automerge-repo"
-import { AutomergeFs, InMemoryBlobStore } from "@just-be/automerge-fs"
+import { AutomergeFs, InMemoryBlobStore, createBlobFileType } from "@just-be/automerge-fs"
 import { AutomergeFileSystem } from "./vfs"
 
 function makeVfs() {
   const amfs = AutomergeFs.create({
     repo: new Repo({ network: [] }),
-    blobStore: new InMemoryBlobStore(),
+    fileTypes: [createBlobFileType(new InMemoryBlobStore())],
   })
   return new AutomergeFileSystem(amfs)
 }

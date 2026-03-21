@@ -3,11 +3,12 @@ import { Repo, type DocHandle } from "@automerge/automerge-repo"
 import { AutomergeFs } from "./fs"
 import { InMemoryBlobStore } from "./blob-store"
 import type { FileType } from "./file-types"
+import { createBlobFileType } from "./file-types/blob"
 
 function makeFs() {
   return AutomergeFs.create({
     repo: new Repo({ network: [] }),
-    blobStore: new InMemoryBlobStore(),
+    fileTypes: [createBlobFileType(new InMemoryBlobStore())],
   })
 }
 
@@ -125,7 +126,7 @@ describe("AutomergeFs direct API", () => {
     expect(content).toBe("second")
   })
 
-  it("binary files are stored in blob store", async () => {
+  it("binary files are stored via blob file type", async () => {
     const fs = makeFs()
     const binary = new Uint8Array([0x00, 0x01, 0xff, 0xfe, 0x80])
     await fs.writeFile("/bin.dat", binary)
@@ -278,10 +279,8 @@ describe("file type system", () => {
     const fs = makeFs()
     const binary = new Uint8Array([0x00, 0x01, 0xff, 0xfe, 0x80])
     await fs.writeFile("/bin.dat", binary)
-    // The file should have a doc handle now (not just a raw blobHash)
     const handle = await fs.getFileDocHandle("/bin.dat")
     expect(handle.doc()).toBeTruthy()
-    // Round-trip the content
     const read = await fs.readFile("/bin.dat")
     expect(read).toEqual(binary)
   })
@@ -326,7 +325,6 @@ describe("file type system", () => {
 
     const fs = AutomergeFs.create({
       repo: new Repo({ network: [] }),
-      blobStore: new InMemoryBlobStore(),
       fileTypes: [jsonFileType],
     })
 
@@ -372,7 +370,6 @@ describe("file type system", () => {
 
     const fs = AutomergeFs.create({
       repo: new Repo({ network: [] }),
-      blobStore: new InMemoryBlobStore(),
       fileTypes: [upperFileType],
     })
 
@@ -422,5 +419,15 @@ describe("file type system", () => {
     await fs.writeFile("/data.csv", "a,b,c")
     const content = new TextDecoder().decode(await fs.readFile("/data.csv"))
     expect(content).toBe("a,b,c")
+  })
+
+  it("fs works without blob file type (text only)", async () => {
+    const fs = AutomergeFs.create({
+      repo: new Repo({ network: [] }),
+    })
+
+    await fs.writeFile("/hello.txt", "world")
+    const content = new TextDecoder().decode(await fs.readFile("/hello.txt"))
+    expect(content).toBe("world")
   })
 })

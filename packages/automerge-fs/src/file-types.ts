@@ -7,23 +7,19 @@
  */
 
 import type { Repo, DocHandle } from "@automerge/automerge-repo"
-import type { BlobStore } from "./blob-store"
 
 // =============================================================================
 // FileType Interface
 // =============================================================================
-
-/** Context provided to file type read/write operations. */
-export interface FileTypeContext {
-  repo: Repo
-  blobStore: BlobStore
-}
 
 /**
  * A file type defines how a particular kind of file is stored in and retrieved
  * from its backing Automerge document.
  *
  * `TDoc` is the shape of the Automerge document this file type uses.
+ *
+ * File types that need external resources (e.g. a blob store) should close
+ * over them — the fs itself doesn't know about those dependencies.
  */
 export interface FileType<TDoc = unknown> {
   /** Unique identifier for this file type (e.g. "text", "blob"). */
@@ -45,24 +41,13 @@ export interface FileType<TDoc = unknown> {
   match?(path: string, content: Uint8Array): boolean
 
   /** Create a new Automerge document for this file type and write initial content. */
-  createDoc(
-    repo: Repo,
-    content: Uint8Array,
-    ctx: FileTypeContext,
-  ): Promise<DocHandle<TDoc>>
+  createDoc(repo: Repo, content: Uint8Array): Promise<DocHandle<TDoc>>
 
   /** Write content into an existing Automerge document. */
-  write(
-    handle: DocHandle<TDoc>,
-    content: Uint8Array,
-    ctx: FileTypeContext,
-  ): Promise<void>
+  write(handle: DocHandle<TDoc>, content: Uint8Array): Promise<void>
 
   /** Read content from an Automerge document, returning raw bytes. */
-  read(
-    handle: DocHandle<TDoc>,
-    ctx: FileTypeContext,
-  ): Promise<Uint8Array>
+  read(handle: DocHandle<TDoc>): Promise<Uint8Array>
 }
 
 // =============================================================================
