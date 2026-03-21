@@ -4,7 +4,7 @@ import { FileSystem } from "effect/FileSystem"
 import { Repo } from "@automerge/automerge-repo"
 import { AutomergeFs } from "./fs"
 import { InMemoryBlobStore } from "./blob-store"
-import { createBlobFileHandler } from "./file-handlers/blob"
+import { createBlobFileHandler } from "./file-handlers"
 import { AutomergeFsFileSystem, AutomergeFsInstance, InMemoryBlobStoreLayer, makeFs } from "./effect"
 
 function makeTestLayer() {

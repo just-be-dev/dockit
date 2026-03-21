@@ -12,8 +12,7 @@ import { systemError, badArgument, type PlatformError } from "effect/PlatformErr
 import type { Repo } from "@automerge/automerge-repo"
 import { AutomergeFs, normalizePath, joinPath } from "./fs"
 import { InMemoryBlobStore, type BlobStore } from "./blob-store"
-import type { FileHandler } from "./file-handlers"
-import { createBlobFileHandler } from "./file-handlers/blob"
+import { type FileHandler, createBlobFileHandler } from "./file-handlers"
 
 // =============================================================================
 // Service Tags

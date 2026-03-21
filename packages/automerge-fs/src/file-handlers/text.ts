@@ -7,7 +7,7 @@
 
 import * as Automerge from "@automerge/automerge"
 import type { Repo, DocHandle } from "@automerge/automerge-repo"
-import type { FileHandler } from "../file-handlers"
+import type { FileHandler } from "./"
 
 export interface TextFileDoc {
   content: string
@@ -19,7 +19,11 @@ export const textFileHandler: FileHandler<TextFileDoc> = {
   name: "text",
   extensions: [],
 
-  match(_path: string, content: Uint8Array): boolean {
+  match(_path: string, doc: unknown): boolean {
+    return typeof (doc as any)?.content === "string"
+  },
+
+  matchContent(_path: string, content: Uint8Array): boolean {
     try {
       utf8Decoder.decode(content)
       return true

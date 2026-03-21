@@ -9,8 +9,8 @@
  */
 
 import type { Repo, DocHandle } from "@automerge/automerge-repo"
-import type { BlobStore } from "../../blob-store"
-import type { FileHandler } from "../file-handlers"
+import type { BlobStore } from "../blob-store"
+import type { FileHandler } from "./"
 
 export interface BlobFileDoc {
   blobRef: string
@@ -28,7 +28,11 @@ export function createBlobFileHandler(blobStore: BlobStore): FileHandler<BlobFil
     name: "blob",
     extensions: [],
 
-    match(_path: string, content: Uint8Array): boolean {
+    match(_path: string, doc: unknown): boolean {
+      return typeof (doc as any)?.blobRef === "string"
+    },
+
+    matchContent(_path: string, content: Uint8Array): boolean {
       try {
         new TextDecoder("utf-8", { fatal: true }).decode(content)
         return false

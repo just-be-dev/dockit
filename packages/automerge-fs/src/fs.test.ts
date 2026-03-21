@@ -2,8 +2,7 @@ import { describe, expect, it } from "bun:test"
 import { Repo, type DocHandle } from "@automerge/automerge-repo"
 import { AutomergeFs } from "./fs"
 import { InMemoryBlobStore } from "./blob-store"
-import type { FileHandler } from "./file-handlers"
-import { createBlobFileHandler } from "./file-handlers/blob"
+import { type FileHandler, createBlobFileHandler } from "./file-handlers"
 
 function makeFs() {
   return AutomergeFs.create({

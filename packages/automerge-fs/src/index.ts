@@ -1,5 +1,11 @@
 export { AutomergeFs, normalizePath, joinPath, type StatInfo, type DirEntry } from "./fs"
 export { type BlobStore, InMemoryBlobStore } from "./blob-store"
-export { FileHandlerRegistry, type FileHandler } from "./file-handlers"
-export { textFileHandler, type TextFileDoc } from "./file-handlers/text"
-export { createBlobFileHandler, type BlobFileDoc } from "./file-handlers/blob"
+export {
+  FileHandlerRegistry,
+  type FileHandler,
+  textFileHandler,
+  type TextFileDoc,
+  createBlobFileHandler,
+  type BlobFileDoc,
+  rawJsonFallbackHandler,
+} from "./file-handlers"

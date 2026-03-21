@@ -14,8 +14,7 @@
 
 import * as Automerge from "@automerge/automerge"
 import { Repo, type DocHandle, type AutomergeUrl } from "@automerge/automerge-repo"
-import { FileHandlerRegistry, type FileHandler } from "./file-handlers"
-import { textFileHandler, type TextFileDoc } from "./file-handlers/text"
+import { FileHandlerRegistry, type FileHandler, textFileHandler, type TextFileDoc } from "./file-handlers"
 
 // =============================================================================
 // Document Schema
@@ -36,7 +35,6 @@ interface FsNode {
     ctime: number
   }
   fileDocId?: string
-  fileHandler?: string
   symlinkTarget?: string
 }
 
@@ -252,15 +250,6 @@ export class AutomergeFs {
     return handle as DocHandle<T>
   }
 
-  /** Resolve the FileHandler for an existing tree entry. */
-  private resolveFileHandler(entry: FsNode): FileHandler {
-    if (entry.fileHandler) {
-      const fh = this.registry.get(entry.fileHandler)
-      if (fh) return fh
-    }
-    return this.registry.get("text")!
-  }
-
   // ===========================================================================
   // Filesystem Operations
   // ===========================================================================
@@ -270,14 +259,14 @@ export class AutomergeFs {
     if (!result) {
       throw new Error(`ENOENT: no such file or directory: ${path}`)
     }
-    const { entry } = result
+    const { entry, resolved } = result
     if (entry.type !== "file") {
       throw new Error(`EISDIR: illegal operation on a directory: ${path}`)
     }
 
     if (entry.fileDocId) {
-      const fh = this.resolveFileHandler(entry)
       const handle = await this.getOrLoadFileHandle(entry.fileDocId)
+      const fh = this.registry.resolveForRead(resolved, handle.doc())
       return fh.read(handle)
     }
 
@@ -311,37 +300,41 @@ export class AutomergeFs {
       ctime: existing?.metadata.ctime ?? now,
     }
 
-    // Determine the file handler for this write
-    let fh: FileHandler
-    if (existing?.fileHandler) {
-      // Reuse the existing file's handler
-      fh = this.registry.get(existing.fileHandler) ?? this.registry.resolve(normalized, bytes)
-    } else {
-      fh = this.registry.resolve(normalized, bytes)
-    }
+    const fh = this.registry.resolveForWrite(normalized, bytes)
 
-    if (existing?.fileDocId && existing.fileHandler === fh.name) {
-      // Same handler — update in place
+    if (existing?.fileDocId) {
       const handle = await this.getOrLoadFileHandle(existing.fileDocId)
-      await fh.write(handle, bytes)
+      const existingFh = this.registry.resolveForRead(normalized, handle.doc())
 
-      this.setEntry(normalized, {
-        type: "file",
-        parent: parentPath,
-        name: getBasename(normalized),
-        metadata,
-        fileDocId: existing.fileDocId,
-        fileHandler: fh.name,
-      })
+      if (existingFh.name === fh.name) {
+        // Same handler — update in place
+        await fh.write(handle, bytes)
+
+        this.setEntry(normalized, {
+          type: "file",
+          parent: parentPath,
+          name: getBasename(normalized),
+          metadata,
+          fileDocId: existing.fileDocId,
+        })
+      } else {
+        // Handler changed — create a new doc
+        const newHandle = await fh.createDoc(this.repo, bytes)
+        this.fileHandles.set(newHandle.url, newHandle)
+        this.fileHandles.delete(existing.fileDocId)
+
+        this.setEntry(normalized, {
+          type: "file",
+          parent: parentPath,
+          name: getBasename(normalized),
+          metadata,
+          fileDocId: newHandle.url,
+        })
+      }
     } else {
-      // New file or handler changed — create a new doc
+      // New file — create doc
       const handle = await fh.createDoc(this.repo, bytes)
       this.fileHandles.set(handle.url, handle)
-
-      // Clean up old doc handle reference
-      if (existing?.fileDocId) {
-        this.fileHandles.delete(existing.fileDocId)
-      }
 
       this.setEntry(normalized, {
         type: "file",
@@ -349,7 +342,6 @@ export class AutomergeFs {
         name: getBasename(normalized),
         metadata,
         fileDocId: handle.url,
-        fileHandler: fh.name,
       })
     }
   }
@@ -496,7 +488,6 @@ export class AutomergeFs {
         },
       }
       if (srcEntry.fileDocId) newEntry.fileDocId = srcEntry.fileDocId
-      if (srcEntry.fileHandler) newEntry.fileHandler = srcEntry.fileHandler
 
       this.setEntry(destNorm, newEntry)
       this.deleteEntry(oldPath)
@@ -706,7 +697,6 @@ export class AutomergeFs {
       },
     }
     if (result.entry.fileDocId) newEntry.fileDocId = result.entry.fileDocId
-    if (result.entry.fileHandler) newEntry.fileHandler = result.entry.fileHandler
 
     this.setEntry(normalized, newEntry)
   }
