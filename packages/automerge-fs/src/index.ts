@@ -5,7 +5,6 @@ export {
   type FileHandler,
   textFileHandler,
   type TextFileDoc,
-  createBlobFileHandler,
   type BlobFileDoc,
   rawJsonFallbackHandler,
 } from "./file-handlers"

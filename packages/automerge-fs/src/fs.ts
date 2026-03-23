@@ -14,7 +14,8 @@
 
 import * as Automerge from "@automerge/automerge"
 import { Repo, type DocHandle, type AutomergeUrl } from "@automerge/automerge-repo"
-import { FileHandlerRegistry, type FileHandler, textFileHandler, type TextFileDoc } from "./file-handlers"
+import { FileHandlerRegistry, type FileHandler, textFileHandler, type TextFileDoc, createBlobFileHandler } from "./file-handlers"
+import type { BlobStore } from "./blob-store"
 
 // =============================================================================
 // Document Schema
@@ -113,18 +114,22 @@ export class AutomergeFs {
     this.registry = registry
   }
 
-  private static buildRegistry(fileHandlers?: FileHandler[]): FileHandlerRegistry {
+  private static buildRegistry(opts: { blobStore?: BlobStore; fileHandlers?: FileHandler[] }): FileHandlerRegistry {
     const registry = new FileHandlerRegistry()
     // Text first — it's the fallback default
     registry.register(textFileHandler)
-    if (fileHandlers) {
-      for (const fh of fileHandlers) registry.register(fh)
+    if (opts.blobStore) {
+      registry.register(createBlobFileHandler(opts.blobStore))
+    }
+    if (opts.fileHandlers) {
+      for (const fh of opts.fileHandlers) registry.register(fh)
     }
     return registry
   }
 
   static create(opts: {
     repo: Repo
+    blobStore?: BlobStore
     fileHandlers?: FileHandler[]
   }): AutomergeFs {
     const handle = opts.repo.create<FsTree>()
@@ -145,13 +150,14 @@ export class AutomergeFs {
     return new AutomergeFs(
       handle,
       opts.repo,
-      AutomergeFs.buildRegistry(opts.fileHandlers),
+      AutomergeFs.buildRegistry(opts),
     )
   }
 
   static async load(opts: {
     repo: Repo
     rootDocUrl: string
+    blobStore?: BlobStore
     fileHandlers?: FileHandler[]
   }): Promise<AutomergeFs> {
     const handle = await opts.repo.find<FsTree>(opts.rootDocUrl as AutomergeUrl)
@@ -159,7 +165,7 @@ export class AutomergeFs {
     return new AutomergeFs(
       handle,
       opts.repo,
-      AutomergeFs.buildRegistry(opts.fileHandlers),
+      AutomergeFs.buildRegistry(opts),
     )
   }
 

@@ -32,15 +32,6 @@ export function createBlobFileHandler(blobStore: BlobStore): FileHandler<BlobFil
       return typeof (doc as any)?.blobRef === "string"
     },
 
-    matchContent(_path: string, content: Uint8Array): boolean {
-      try {
-        new TextDecoder("utf-8", { fatal: true }).decode(content)
-        return false
-      } catch {
-        return true
-      }
-    },
-
     async createDoc(repo: Repo, content: Uint8Array): Promise<DocHandle<BlobFileDoc>> {
       const hash = await createBlobHash(content)
       await blobStore.set(hash, content)

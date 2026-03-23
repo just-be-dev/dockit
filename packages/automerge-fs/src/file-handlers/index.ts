@@ -44,16 +44,6 @@ export interface FileHandler<TDoc = unknown> {
    */
   match?(path: string, doc: unknown): boolean
 
-  /**
-   * Write-time predicate. Called with the full file path and the raw content
-   * bytes to determine if this handler should store this content.
-   * Only called when no extension match is found.
-   *
-   * If absent, this handler can only be selected for writes by extension match
-   * or path-based `match(path, undefined)`.
-   */
-  matchContent?(path: string, content: Uint8Array): boolean
-
   /** Create a new Automerge document for this handler and write initial content. */
   createDoc(repo: Repo, content: Uint8Array): Promise<DocHandle<TDoc>>
 
@@ -107,7 +97,7 @@ export class FileHandlerRegistry {
    * Resolution order:
    * 1. File extension match (last registered wins).
    * 2. Path-based `match(path, undefined)` predicates (last registered wins).
-   * 3. `matchContent(path, content)` predicates (last registered wins).
+   * 3. Sniff a small prefix to pick text vs blob handler.
    * 4. Falls back to the first registered handler (typically "text").
    */
   resolveForWrite(path: string, content: Uint8Array): FileHandler {
@@ -126,11 +116,10 @@ export class FileHandlerRegistry {
       if (fh.match?.(path, undefined)) return fh
     }
 
-    // Content sniffers
-    for (let i = this.handlers.length - 1; i >= 0; i--) {
-      const fh = this.handlers[i]!
-      if (fh.matchContent?.(path, content)) return fh
-    }
+    // No handler claimed this file — sniff a small prefix to pick text vs blob
+    const handlerName = looksLikeText(content) ? "text" : "blob"
+    const handler = this.handlers.find((h) => h.name === handlerName)
+    if (handler) return handler
 
     return this.handlers[0] ?? rawHandler
   }
@@ -158,4 +147,15 @@ function extname(path: string): string {
   const dotIndex = basename.lastIndexOf(".")
   if (dotIndex <= 0) return ""
   return basename.slice(dotIndex)
+}
+
+const textProbeDecoder = new TextDecoder("utf-8", { fatal: true })
+
+function looksLikeText(content: Uint8Array): boolean {
+  try {
+    textProbeDecoder.decode(content.subarray(0, 512))
+    return true
+  } catch {
+    return false
+  }
 }

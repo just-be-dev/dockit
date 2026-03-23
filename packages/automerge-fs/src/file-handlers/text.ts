@@ -13,23 +13,12 @@ export interface TextFileDoc {
   content: string
 }
 
-const utf8Decoder = new TextDecoder("utf-8", { fatal: true })
-
 export const textFileHandler: FileHandler<TextFileDoc> = {
   name: "text",
   extensions: [],
 
   match(_path: string, doc: unknown): boolean {
     return typeof (doc as any)?.content === "string"
-  },
-
-  matchContent(_path: string, content: Uint8Array): boolean {
-    try {
-      utf8Decoder.decode(content)
-      return true
-    } catch {
-      return false
-    }
   },
 
   async createDoc(repo: Repo, content: Uint8Array): Promise<DocHandle<TextFileDoc>> {
