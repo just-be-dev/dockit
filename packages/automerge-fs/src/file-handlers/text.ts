@@ -7,24 +7,22 @@
 
 import * as Automerge from "@automerge/automerge"
 import type { Repo, DocHandle } from "@automerge/automerge-repo"
-import type { FileHandler } from "./"
+import type { FileHandler, TypedDoc } from "./"
 
-export interface TextFileDoc {
+export interface TextFileDoc extends TypedDoc {
   content: string
 }
 
 export const textFileHandler: FileHandler<TextFileDoc> = {
-  name: "text",
+  type: "text",
+  version: "v1",
   extensions: [],
-
-  match(_path: string, doc: unknown): boolean {
-    return typeof (doc as any)?.content === "string"
-  },
 
   async createDoc(repo: Repo, content: Uint8Array): Promise<DocHandle<TextFileDoc>> {
     const text = new TextDecoder().decode(content)
     const handle = repo.create<TextFileDoc>()
     handle.change((doc) => {
+      doc._type = "text.v1"
       doc.content = text
     })
     return handle
@@ -39,6 +37,10 @@ export const textFileHandler: FileHandler<TextFileDoc> = {
 
   async read(handle: DocHandle<TextFileDoc>): Promise<Uint8Array> {
     const doc = handle.doc()
+    return new TextEncoder().encode(doc?.content ?? "")
+  },
+
+  async readDoc(doc: TextFileDoc): Promise<Uint8Array> {
     return new TextEncoder().encode(doc?.content ?? "")
   },
 }

@@ -2,14 +2,27 @@
  * Generic file handler system for AutomergeFs.
  *
  * Every file in the filesystem is backed by an Automerge document. File handlers
- * define how content is read from and written to that document, and how to
- * match files to the right handler.
+ * define how content is read from and written to that document.
  *
- * Handler selection is "schema on read": the registry inspects the loaded doc at
- * read time to pick the right handler. No handler name is persisted in the tree.
+ * Each document stores a `_type` discriminator (e.g. "text.v1") that identifies
+ * which handler and version created it. Version-aware handlers can provide lenses
+ * for migrating between versions.
  */
 
 import type { Repo, DocHandle } from "@automerge/automerge-repo"
+import {
+  type TypedDoc,
+  type FileHandlerLens,
+  parseDocType,
+  formatDocType,
+  applyLenses,
+} from "./utils/lens"
+
+// =============================================================================
+// Re-exports from lens module
+// =============================================================================
+
+export { type TypedDoc, type FileHandlerLens, parseDocType, formatDocType, applyLenses } from "./utils/lens"
 
 // =============================================================================
 // FileHandler Interface
@@ -25,8 +38,11 @@ import type { Repo, DocHandle } from "@automerge/automerge-repo"
  * over them — the fs itself doesn't know about those dependencies.
  */
 export interface FileHandler<TDoc = unknown> {
-  /** Unique identifier for this handler (e.g. "text", "blob"). */
-  readonly name: string
+  /** Type name for this handler (e.g. "text", "blob"). */
+  readonly type: string
+
+  /** Version string (e.g. "v1"). Combined with type → _type = "text.v1". */
+  readonly version: string
 
   /**
    * File extensions this handler handles, including the dot (e.g. [".png", ".jpg"]).
@@ -34,14 +50,8 @@ export interface FileHandler<TDoc = unknown> {
    */
   readonly extensions: readonly string[]
 
-  /**
-   * Read-time predicate. Called with the full file path and the loaded Automerge
-   * doc to determine if this handler can read the document.
-   * Extension filtering happens before this is called.
-   *
-   * Return `true` to claim this file for reading.
-   */
-  match?(path: string, doc: unknown): boolean
+  /** Optional lenses for migrating between versions. */
+  readonly lenses?: readonly FileHandlerLens[]
 
   /** Create a new Automerge document for this handler and write initial content. */
   createDoc(repo: Repo, content: Uint8Array): Promise<DocHandle<TDoc>>
@@ -51,6 +61,9 @@ export interface FileHandler<TDoc = unknown> {
 
   /** Read content from an Automerge document, returning raw bytes. */
   read(handle: DocHandle<TDoc>): Promise<Uint8Array>
+
+  /** Read from a plain doc value (used for lensed views). */
+  readDoc(doc: TDoc): Promise<Uint8Array>
 }
 
 // =============================================================================
@@ -58,66 +71,65 @@ export interface FileHandler<TDoc = unknown> {
 // =============================================================================
 
 export class FileHandlerRegistry {
+  private handlersByType: Map<string, FileHandler> = new Map()
+  private extensionMap: Map<string, string> = new Map()
   private handlers: FileHandler[] = []
 
   /** Register a file handler. Later registrations take priority over earlier ones. */
   register(handler: FileHandler): void {
     this.handlers.push(handler)
+    this.handlersByType.set(handler.type, handler)
+    for (const ext of handler.extensions) {
+      this.extensionMap.set(ext, handler.type)
+    }
   }
 
   /**
-   * Resolve which handler should read an existing doc (schema-on-read).
+   * Resolve which handler should read an existing doc.
    *
-   * Resolution order:
-   * 1. If the file extension is claimed by any registered handler, only those
-   *    handlers are considered as candidates.
-   * 2. Otherwise all handlers are candidates.
-   * 3. Among candidates (last registered first), the first whose `match(path, doc)`
-   *    returns true (or has no `match`) is returned.
-   * 4. Throws if nothing matches.
+   * Reads the `_type` field from the doc, parses it, and looks up the handler
+   * by type name. If the version differs from the handler's current version,
+   * callers should use `applyLenses` to transform the doc.
    */
-  resolveForRead(path: string, doc: unknown): FileHandler {
-    const ext = extname(path)
-    const byExt = ext ? this.handlers.filter((h) => h.extensions.includes(ext)) : []
-
-    const candidates = byExt.length > 0 ? byExt : this.handlers
-
-    for (let i = candidates.length - 1; i >= 0; i--) {
-      const fh = candidates[i]!
-      if (!fh.match || fh.match(path, doc)) return fh
+  resolveForRead(doc: unknown): FileHandler {
+    const typed = doc as TypedDoc | null | undefined
+    if (typed?._type) {
+      const { type } = parseDocType(typed._type)
+      const handler = this.handlersByType.get(type)
+      if (handler) return handler
     }
 
-    throw new Error(`No file handler matched for reading "${path}"`)
+    throw new Error(`No file handler matched for reading (doc _type: ${(doc as any)?._type ?? "missing"})`)
   }
 
   /**
    * Resolve which handler should write new content.
    *
    * Resolution order:
-   * 1. File extension match (last registered wins).
-   * 2. Path-based `match(path, undefined)` predicates (last registered wins).
-   * 3. Sniff a small prefix to pick text vs blob handler.
-   * 4. Falls back to the first registered handler (typically "text").
+   * 1. File extension match via extensionMap.
+   * 2. Sniff a small prefix to pick text vs blob handler.
+   * 3. Falls back to the first registered handler (typically "text").
    */
   resolveForWrite(path: string, content: Uint8Array): FileHandler {
     const ext = extname(path)
 
     if (ext) {
+      const typeName = this.extensionMap.get(ext)
+      if (typeName) {
+        const handler = this.handlersByType.get(typeName)
+        if (handler) return handler
+      }
+
+      // Check handlers in reverse order for extension match
       for (let i = this.handlers.length - 1; i >= 0; i--) {
         const fh = this.handlers[i]!
         if (fh.extensions.includes(ext)) return fh
       }
     }
 
-    // Path-based matchers (handlers whose match() uses only the path)
-    for (let i = this.handlers.length - 1; i >= 0; i--) {
-      const fh = this.handlers[i]!
-      if (fh.match?.(path, undefined)) return fh
-    }
-
-    // No handler claimed this file — sniff a small prefix to pick text vs blob
-    const handlerName = looksLikeText(content) ? "text" : "blob"
-    const handler = this.handlers.find((h) => h.name === handlerName)
+    // Sniff content to pick text vs blob
+    const typeName = looksLikeText(content) ? "text" : "blob"
+    const handler = this.handlersByType.get(typeName)
     if (handler) return handler
 
     const fallback = this.handlers[0]
@@ -125,9 +137,21 @@ export class FileHandlerRegistry {
     return fallback
   }
 
-  /** Look up a file handler by name. */
-  get(name: string): FileHandler | undefined {
-    return this.handlers.find((h) => h.name === name)
+  /**
+   * Apply lenses to transform a doc from its stored version to the handler's
+   * current version. Returns a transformed view — does NOT mutate the stored doc.
+   * Returns null if no lens path is found (versions already match or no lenses available).
+   */
+  applyLenses(doc: unknown, handler: FileHandler): unknown | null {
+    const lenses = handler.lenses
+    if (!lenses?.length) return null
+    const targetTag = formatDocType(handler.type, handler.version)
+    return applyLenses(doc, targetTag, lenses)
+  }
+
+  /** Look up a file handler by type name. */
+  getByType(type: string): FileHandler | undefined {
+    return this.handlersByType.get(type)
   }
 }
 
@@ -139,7 +163,7 @@ export { textFileHandler, type TextFileDoc } from "./text"
 export { createBlobFileHandler, type BlobFileDoc } from "./blob"
 
 // =============================================================================
-// Helpers
+// Internal Helpers
 // =============================================================================
 
 function extname(path: string): string {

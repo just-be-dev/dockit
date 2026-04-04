@@ -3,6 +3,11 @@ export { type BlobStore, InMemoryBlobStore } from "./blob-store"
 export {
   FileHandlerRegistry,
   type FileHandler,
+  type TypedDoc,
+  type FileHandlerLens,
+  applyLenses,
+  formatDocType,
+  parseDocType,
   textFileHandler,
   type TextFileDoc,
   type BlobFileDoc,

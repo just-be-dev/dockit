@@ -10,9 +10,9 @@
 
 import type { Repo, DocHandle } from "@automerge/automerge-repo"
 import type { BlobStore } from "../blob-store"
-import type { FileHandler } from "./"
+import type { FileHandler, TypedDoc } from "./"
 
-export interface BlobFileDoc {
+export interface BlobFileDoc extends TypedDoc {
   blobRef: string
 }
 
@@ -25,12 +25,9 @@ async function createBlobHash(data: Uint8Array): Promise<string> {
 
 export function createBlobFileHandler(blobStore: BlobStore): FileHandler<BlobFileDoc> {
   return {
-    name: "blob",
+    type: "blob",
+    version: "v1",
     extensions: [],
-
-    match(_path: string, doc: unknown): boolean {
-      return typeof (doc as any)?.blobRef === "string"
-    },
 
     async createDoc(repo: Repo, content: Uint8Array): Promise<DocHandle<BlobFileDoc>> {
       const hash = await createBlobHash(content)
@@ -38,6 +35,7 @@ export function createBlobFileHandler(blobStore: BlobStore): FileHandler<BlobFil
 
       const handle = repo.create<BlobFileDoc>()
       handle.change((doc) => {
+        doc._type = "blob.v1"
         doc.blobRef = hash
       })
       return handle
@@ -61,6 +59,16 @@ export function createBlobFileHandler(blobStore: BlobStore): FileHandler<BlobFil
 
     async read(handle: DocHandle<BlobFileDoc>): Promise<Uint8Array> {
       const doc = handle.doc()
+      if (!doc?.blobRef) return new Uint8Array(0)
+
+      const blob = await blobStore.get(doc.blobRef)
+      if (!blob) {
+        throw new Error(`Blob not found: ${doc.blobRef}`)
+      }
+      return blob
+    },
+
+    async readDoc(doc: BlobFileDoc): Promise<Uint8Array> {
       if (!doc?.blobRef) return new Uint8Array(0)
 
       const blob = await blobStore.get(doc.blobRef)

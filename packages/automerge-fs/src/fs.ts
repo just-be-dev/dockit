@@ -14,7 +14,7 @@
 
 import * as Automerge from "@automerge/automerge"
 import { Repo, type DocHandle, type AutomergeUrl } from "@automerge/automerge-repo"
-import { FileHandlerRegistry, type FileHandler, textFileHandler, type TextFileDoc, createBlobFileHandler } from "./file-handlers"
+import { FileHandlerRegistry, type FileHandler, type TypedDoc, textFileHandler, type TextFileDoc, createBlobFileHandler, formatDocType } from "./file-handlers"
 import type { BlobStore } from "./blob-store"
 
 // =============================================================================
@@ -36,6 +36,7 @@ interface FsNode {
     ctime: number
   }
   fileDocId?: string
+  fileType?: string
   symlinkTarget?: string
 }
 
@@ -272,7 +273,15 @@ export class AutomergeFs {
 
     if (entry.fileDocId) {
       const handle = await this.getOrLoadFileHandle(entry.fileDocId)
-      const fh = this.registry.resolveForRead(resolved, handle.doc())
+      const doc = handle.doc()
+      const fh = this.registry.resolveForRead(doc)
+
+      // Check if doc version differs from handler's current version — apply lenses
+      const lensed = this.registry.applyLenses(doc, fh)
+      if (lensed !== null) {
+        return fh.readDoc(lensed as any)
+      }
+
       return fh.read(handle)
     }
 
@@ -309,11 +318,9 @@ export class AutomergeFs {
     const fh = this.registry.resolveForWrite(normalized, bytes)
 
     if (existing?.fileDocId) {
-      const handle = await this.getOrLoadFileHandle(existing.fileDocId)
-      const existingFh = this.registry.resolveForRead(normalized, handle.doc())
-
-      if (existingFh.name === fh.name) {
+      if (existing.fileType === fh.type) {
         // Same handler — update in place
+        const handle = await this.getOrLoadFileHandle(existing.fileDocId)
         await fh.write(handle, bytes)
 
         this.setEntry(normalized, {
@@ -322,6 +329,7 @@ export class AutomergeFs {
           name: getBasename(normalized),
           metadata,
           fileDocId: existing.fileDocId,
+          fileType: fh.type,
         })
       } else {
         // Handler changed — create a new doc
@@ -335,6 +343,7 @@ export class AutomergeFs {
           name: getBasename(normalized),
           metadata,
           fileDocId: newHandle.url,
+          fileType: fh.type,
         })
       }
     } else {
@@ -348,6 +357,7 @@ export class AutomergeFs {
         name: getBasename(normalized),
         metadata,
         fileDocId: handle.url,
+        fileType: fh.type,
       })
     }
   }
@@ -494,6 +504,7 @@ export class AutomergeFs {
         },
       }
       if (srcEntry.fileDocId) newEntry.fileDocId = srcEntry.fileDocId
+      if (srcEntry.fileType) newEntry.fileType = srcEntry.fileType
 
       this.setEntry(destNorm, newEntry)
       this.deleteEntry(oldPath)
@@ -703,6 +714,7 @@ export class AutomergeFs {
       },
     }
     if (result.entry.fileDocId) newEntry.fileDocId = result.entry.fileDocId
+    if (result.entry.fileType) newEntry.fileType = result.entry.fileType
 
     this.setEntry(normalized, newEntry)
   }
